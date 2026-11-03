@@ -17,7 +17,7 @@ from rsq_compare.core.db import register_session
 from rsq_compare.core.discovery import scan_folder
 from rsq_compare.core.loader import load_session
 
-RESULT_KOR = {"added": "새로 등록", "exists": "이미 등록됨(건너뜀)", "no_dis": "등록 안 함(.dis 없음)", "error": "오류"}
+RESULT_KOR = {"added": "새로 등록", "review": "측정 관계 확인 필요", "version": "재처리본 등록", "exists": "이미 등록됨(건너뜀)", "no_dis": "등록 안 함(.dis 없음)", "error": "오류"}
 
 
 def import_folder(root: Path, db_path: Path, progress: Callable[[str], None] | None = None) -> pd.DataFrame:

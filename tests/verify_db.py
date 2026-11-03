@@ -46,7 +46,10 @@ shutil.copy(dis_t07, data / "A" / "test_20261029_105656_T07포함.dis")
 for p in src.iterdir():
     if p.name.startswith("~$"):
         continue
-    shutil.copy(p, data / "B_가상" / p.name.replace("test_20261029_105656", "virtual_20261030_090000"))
+    target = data / "B_가상" / p.name.replace("test_20261029_105656", "virtual_20261030_090000")
+    shutil.copy(p,target)
+    if p.suffix in ('.dis','.sum','.snr','.vel'):
+        target.write_bytes(target.read_bytes().replace(b'2026-10-29',b'2026-10-30').replace(b'20261029',b'20261030'))
 before = hashes(data)
 D = work / "누적.db"
 
@@ -62,7 +65,7 @@ from rsq_compare.core.discovery import scan_folder  # noqa: E402
 from rsq_compare.core.loader import load_session  # noqa: E402
 sfA = next(s for s in scan_folder(data)[0] if s.name == "test_20261029_105656")
 st, sid3, _ = db.register_session(D, load_session(sfA, dis_path=sfA.dis_candidates[1]))
-check("같은 세션이라도 다른 .dis는 별도 등록", st == "added" and len(db.sessions_df(D)) == 3)
+check("다른 .dis는 재처리본으로 이력 보존", st == "version" and len(db.sessions_df(D)) == 3)
 
 sess = db.sessions_df(D)
 tr = db.transects_df(D)
@@ -125,7 +128,8 @@ m_mg = match_to_transects(tr3, sess, db.series_values(D, sid_s), "UTC", margin_m
 check("앞뒤 여유 5분이면 T03에도 자료 포함", m_mg[m_mg["회차"] == "T03"]["시간창 안 자료 수"].iloc[0] >= 1)
 
 print("--- 엑셀 내보내기 / CLI ---")
-res = export_db(D, list(sess["id"]), work / "결과")
+chosen_ids = [sid3] + list(sess.loc[sess.session_name == "virtual_20261030_090000", "id"])
+res = export_db(D, chosen_ids, work / "결과")
 wb = load_workbook(res["files"][0])
 check("시트 구성", {"처리정보", "세션비교", "회차전체", "비교유량_회차별", "등록시_점검내역", "외부_수위(가상)"} <= set(wb.sheetnames),
       wb.sheetnames)

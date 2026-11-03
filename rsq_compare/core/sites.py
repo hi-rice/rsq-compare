@@ -50,6 +50,23 @@ def read_catalog_file(path: Path) -> tuple[pd.DataFrame, list[str]]:
     else:
         raw = pd.read_csv(path, dtype=str, encoding="utf-8-sig")
     by_norm = {_norm(c): c for c in raw.columns}
+    # Excel에 숫자로 저장했어도 명시된 11자리 표시 형식의 선행 0은 보존한다.
+    if path.suffix.lower() in ('.xlsx','.xlsm'):
+        from openpyxl import load_workbook
+        wb = load_workbook(path,read_only=True,data_only=True)
+        try:
+            sheet = wb.worksheets[0]
+            candidates = {_norm(c) for c in CATALOG_COLUMNS[0][1]}
+            columns = [i for i,c in enumerate(raw.columns) if _norm(c) in candidates]
+            for row,cells in enumerate(sheet.iter_rows(min_row=2)):
+                if row >= len(raw):
+                    break
+                for col in columns:
+                    cell = cells[col]
+                    if isinstance(cell.value,(int,float)) and float(cell.value).is_integer() and re.fullmatch(r'0{11}',cell.number_format):
+                        raw.iat[row,col] = f'{int(cell.value):011d}'
+        finally:
+            wb.close()
     out = pd.DataFrame()
     msgs = []
     for key, cands in CATALOG_COLUMNS:
@@ -59,12 +76,17 @@ def read_catalog_file(path: Path) -> tuple[pd.DataFrame, list[str]]:
             msgs.append(f"목록에 '{cands[0]}' 열이 없어 빈값으로 둠")
     if out["site_code"].isna().all():
         raise ValueError("목록에서 '소하천코드' 열을 찾지 못했습니다.")
+    out = out[out["site_code"].notna()]
+    source_rows = [int(i)+2 for i in out.index]
+    out = out.reset_index(drop=True)
+    raw_rows = out.where(out.notna(), None).to_dict("records")
     for k in ("obs_lat", "obs_lon", "aws_lat", "aws_lon", "aws_dist_km", "slope", "length_km", "area_km2"):
         out[k] = pd.to_numeric(out[k], errors="coerce")
-    before = len(out)
-    out = out[out["site_code"].notna()].drop_duplicates("site_code", keep="first").reset_index(drop=True)
-    if len(out) < before:
-        msgs.append(f"소하천코드가 비었거나 중복된 {before - len(out)}행은 제외")
+    counts = out.groupby('site_code',dropna=False).size()
+    if (counts > 1).any():
+        msgs.append(f"중복 코드 {(counts > 1).sum()}개: 모든 행을 보존하며 코드 확인 표에 표시합니다.")
+    out.attrs['raw_rows'] = raw_rows
+    out.attrs['source_rows'] = source_rows
     used = [c for c in raw.columns if any(_norm(c) == _norm(x) for _k, cs in CATALOG_COLUMNS for x in cs)]
     msgs.append(f"가져온 열 {len(used)}개 / 전체 {len(raw.columns)}개 "
                 "(서비스 Key·IP·연락처 등 나머지 열은 읽지 않음)")

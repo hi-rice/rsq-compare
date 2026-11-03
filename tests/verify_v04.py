@@ -73,6 +73,9 @@ check("목록 저장", n == len(cat) and n >= 200, f"{n}곳")
 
 print("--- 가져오기·지점 자동 연결 ---")
 rep = import_folder(work / "현장", D)
+# 같은 원본을 변형한 가상 A/B다. 이 시험에서는 사용자가 별도 측정임을 명시 확인한다.
+for _, pending in db.sessions_df(D).query("review_status == 'pending'").iterrows():
+    db.resolve_measurement(D,int(pending.id))
 sess = db.sessions_df(D)
 a = sess[sess["session_name"] == "fieldA_20261029_105656"].iloc[0]
 b = sess[sess["session_name"] == "fieldB_20261029_105656"].iloc[0]

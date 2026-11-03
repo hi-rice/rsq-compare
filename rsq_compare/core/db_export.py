@@ -11,6 +11,7 @@ from openpyxl.styles import Font
 
 from rsq_compare import APP_NAME, APP_VERSION
 from rsq_compare.core import db
+from rsq_compare.core.catalog import catalog_review
 from rsq_compare.core.export import _unique_dir, write_df, write_lines
 from rsq_compare.core.external import match_to_transects
 from rsq_compare.core.multi import (
@@ -39,13 +40,17 @@ def external_tables(db_path: Path, sess: pd.DataFrame, tr: pd.DataFrame, margin_
 
 def export_db(db_path: Path, ids: list[int], out_parent: Path, margin_min: float = 0.0,
               progress: Callable[[str], None] | None = None) -> dict:
+    from rsq_compare.core.identity import validate_comparison
+    db.init_db(db_path)
+    allsess = db.sessions_df(db_path)
+    sess = allsess[allsess['id'].isin(ids)].reset_index(drop=True)
+    validate_comparison(sess)
     say = progress or (lambda _m: None)
     out = _unique_dir(Path(out_parent) / f"누적비교_{datetime.now():%Y%m%d_%H%M%S}")
     png = out / "그래프"
     png.mkdir()
-    allsess = db.sessions_df(db_path)
-    sess = allsess[allsess["id"].isin(ids)].reset_index(drop=True)
     tr = db.transects_df(db_path, list(sess["id"]))
+    tr = tr[tr.compare_selected.fillna(1) == 1]
     summ = session_summary(sess, tr)
     files = []
     say("그래프 저장 중...")
@@ -84,9 +89,12 @@ def export_db(db_path: Path, ids: list[int], out_parent: Path, margin_min: float
     ws.column_dimensions["A"].width = 22
     ws.column_dimensions["B"].width = 100
     for name, df in [("세션비교", summ), ("회차전체", _tr_view(tr)),
+                     ("회차선택", _tr_view(db.transects_df(db_path,list(sess.id)))),
                      ("비교유량_회차별", reference_by_transect(sess, tr)),
                      ("회차별_수위", db.gauge_view(tr).drop(columns=["회차ID"], errors="ignore")),
                      ("측정지점_정보", _site_sheet(db_path, sess)),
+                     ("측정버전_이력", allsess),
+                     ("코드확인", catalog_review(db_path)),
                      ("등록시_점검내역", _checks(db_path, list(sess["id"])))]:
         w = wb.create_sheet(name)
         write_df(w, df if not df.empty else pd.DataFrame({"안내": ["자료 없음"]}), 1)
@@ -112,7 +120,7 @@ def export_db(db_path: Path, ids: list[int], out_parent: Path, margin_min: float
 def _tr_view(tr: pd.DataFrame) -> pd.DataFrame:
     if tr.empty:
         return tr
-    m = {"session_id": "등록ID", "session_name": "세션", "dis_file": "사용한 .dis", "label": "회차",
+    m = {"compare_selected": "비교에 선택(1/0)", "session_id": "등록ID", "session_name": "세션", "dis_file": "사용한 .dis", "label": "회차",
          "has_summary": "DIS에 있음(1/0)", "file_name": "측정 파일명", "start_edge": "시작 Edge",
          "start_time_raw": "시작 시각(DIS 원문)", "duration_raw": "소요시간", "duration_s": "소요시간(s)",
          "width": "폭 [DIS]", "area": "면적 [DIS]", "mean_speed": "평균 속력 [DIS]", "total_q": "Total Q [DIS]",

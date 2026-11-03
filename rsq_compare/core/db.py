@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import hashlib
 import math
+import json
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
@@ -26,7 +28,7 @@ from rsq_compare.core.parsers import to_number
 from rsq_compare.core.sites import CODE_RE, gps_from_sum
 from rsq_compare.core.tables import q_unit, time_basis
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -47,8 +49,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     time_basis TEXT,
     first_start_time TEXT,
     registered_at TEXT,
-    memo TEXT,
-    UNIQUE(session_name, dis_sha256)
+    memo TEXT
 );
 CREATE TABLE IF NOT EXISTS transects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -110,9 +111,12 @@ def connect(db_path: Path):
 # v0.4에서 추가된 열 (예전 DB는 열기만 하면 자동으로 추가됨, 기존 자료는 그대로)
 MIGRATE_COLUMNS = {
     "sessions": [("site_code", "TEXT"), ("site_code_source", "TEXT"), ("station_number_raw", "TEXT"),
-                 ("operator", "TEXT"), ("gps_lat", "REAL"), ("gps_lon", "REAL"), ("gps_n", "INTEGER")],
+                 ("operator", "TEXT"), ("gps_lat", "REAL"), ("gps_lon", "REAL"), ("gps_n", "INTEGER"), ("content_hash", "TEXT"), ("detail_hash", "TEXT"),
+                 ("anchor_hash", "TEXT"), ("manifest_json", "TEXT"), ("measurement_id", "INTEGER"),
+                 ("previous_id", "INTEGER"), ("review_status", "TEXT DEFAULT 'confirmed'"),
+                 ("review_note", "TEXT"), ("compare_selected", "INTEGER DEFAULT 1")],
     "transects": [("gh_start", "REAL"), ("gh_start_time", "TEXT"), ("gh_end", "REAL"), ("gh_end_time", "TEXT"),
-                  ("gh_unit", "TEXT"), ("gh_manual", "REAL"), ("gh_manual_time", "TEXT"), ("gh_manual_note", "TEXT")],
+                  ("gh_unit", "TEXT"), ("gh_manual", "REAL"), ("gh_manual_time", "TEXT"), ("gh_manual_note", "TEXT"), ("compare_selected", "INTEGER DEFAULT 1"), ("selection_explicit", "INTEGER DEFAULT 0")],
     "ext_series": [("site_code", "TEXT"), ("kind", "TEXT"), ("target_session_id", "INTEGER"),
                    ("rain_type", "TEXT"), ("rain_interval_min", "REAL")],
     "ext_values": [("t_raw", "TEXT"), ("t_utc", "TEXT"), ("time_applied", "TEXT")],
@@ -128,12 +132,67 @@ def _migrate(con) -> None:
     con.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)", (str(SCHEMA_VERSION),))
 
 
+def _prepare_v4(path):
+    if not path.exists():
+        return
+    with sqlite3.connect(path) as con:
+        row = con.execute("SELECT sql FROM sqlite_master WHERE name='sessions'").fetchone()
+        if not row:
+            return
+        constraint = bool(re.search(r'UNIQUE\s*\(\s*session_name\s*,\s*dis_sha256\s*\)',row[0],re.I))
+        if not constraint and 'content_hash' in row[0]:
+            return
+        # 고유 제약을 제거하기 전, 외래키와 사용자 입력을 포함한 DB 전체 백업.
+        backup = path.with_name(path.name + '.before-v4.bak')
+        n = 1
+        while backup.exists():
+            backup = path.with_name(path.name + f'.before-v4-{n}.bak')
+            n += 1
+        with sqlite3.connect(backup) as dest:
+            con.backup(dest)
+        if not constraint:
+            return
+        con.execute('PRAGMA foreign_keys=OFF')
+        con.execute('BEGIN IMMEDIATE')
+        objects = con.execute("SELECT sql FROM sqlite_master WHERE tbl_name='sessions' AND type IN ('index','trigger') AND sql IS NOT NULL").fetchall()
+        sequence = con.execute("SELECT seq FROM sqlite_sequence WHERE name='sessions'").fetchone()
+        sql = re.sub(r'CREATE TABLE(?: IF NOT EXISTS)? ["`\[]?sessions["`\]]?', 'CREATE TABLE sessions_v4',row[0],count=1,flags=re.I)
+        sql = re.sub(r',\s*UNIQUE\s*\(\s*session_name\s*,\s*dis_sha256\s*\)', '', sql)
+        con.execute(sql)
+        con.execute('INSERT INTO sessions_v4 SELECT * FROM sessions')
+        con.execute('DROP TABLE sessions')
+        con.execute('ALTER TABLE sessions_v4 RENAME TO sessions')
+        for (sql,) in objects:
+            con.execute(sql)
+        if sequence:
+            con.execute("UPDATE sqlite_sequence SET seq=MAX(seq,?) WHERE name='sessions'",sequence)
+        if con.execute('PRAGMA foreign_key_check').fetchall():
+            raise ValueError('DB 이관 중 연결 오류. 백업을 확인하세요.')
+        con.commit()
+
+
 def init_db(db_path: Path) -> None:
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    _prepare_v4(db_path)
     with connect(db_path) as con:
         con.executescript(SCHEMA)
         _migrate(con)
+        from rsq_compare.core.catalog import initialize_catalog
+        initialize_catalog(con)
+        con.execute("UPDATE sessions SET measurement_id=id WHERE measurement_id IS NULL")
+        if not con.execute("SELECT 1 FROM meta WHERE key='legacy_identity_review'").fetchone():
+            from rsq_compare.core.identity import digest
+            for (sid,) in con.execute('SELECT id FROM sessions WHERE content_hash IS NULL').fetchall():
+                anchors = con.execute('SELECT file_name,start_time_raw FROM transects WHERE session_id=? AND has_summary=1 AND file_name IS NOT NULL ORDER BY file_name,start_time_raw',(sid,)).fetchall()
+                if anchors:
+                    con.execute('UPDATE sessions SET anchor_hash=? WHERE id=?',(digest(anchors),sid))
+            con.execute("""UPDATE sessions SET review_status='pending', review_note='이전 DB의 같은 DIS: 측정 관계 확인 필요'
+                           WHERE content_hash IS NULL AND dis_sha256 IN
+                           (SELECT dis_sha256 FROM sessions GROUP BY dis_sha256 HAVING count(*)>1)
+                           OR (content_hash IS NULL AND anchor_hash IN
+                           (SELECT anchor_hash FROM sessions WHERE anchor_hash IS NOT NULL GROUP BY anchor_hash HAVING count(*)>1))""")
+            con.execute("INSERT INTO meta VALUES('legacy_identity_review','done')")
         con.execute("INSERT OR IGNORE INTO meta(key, value) VALUES('schema_version', ?)", (str(SCHEMA_VERSION),))
         con.execute("INSERT OR IGNORE INTO meta(key, value) VALUES('created_at', ?)", (_now(),))
 
@@ -143,17 +202,37 @@ def _now() -> str:
 
 
 # ---------------------------------------------------------------- 등록
-def register_session(db_path: Path, sd: SessionData, memo: str = "") -> tuple[str, int | None, str]:
+def register_session(db_path: Path, sd: SessionData, memo: str = "", selected_nums: list[int] | None = None) -> tuple[str, int | None, str]:
     """세션 1개를 등록. 반환: (결과 'added'|'exists'|'no_dis', session_id, 안내 문구)"""
     init_db(db_path)
     if sd.dis_path is None or sd.dis is None:
         return "no_dis", None, f"{sd.files.name}: .dis가 없어 등록하지 않음(요약 결과가 없으면 비교할 값이 없음)"
-    sha = sha256_file(sd.dis_path)
+    from rsq_compare.core.identity import fingerprint, copy_inputs
+    fp = fingerprint(sd)
+    sha = fp['manifest']['dis']['sha256']
+    parent, pending, note = None, False, ''
     with connect(db_path) as con:
-        row = con.execute("SELECT id FROM sessions WHERE session_name=? AND dis_sha256=?",
-                          (sd.files.name, sha)).fetchone()
+        con.execute('BEGIN IMMEDIATE')
+        row = con.execute('SELECT id FROM sessions WHERE content_hash=?', (fp['content'],)).fetchone()
         if row:
-            return "exists", row[0], f"{sd.files.name} ({sd.dis_path.name}): 이미 등록됨 → 건너뜀"
+            return 'exists', row[0], '입력 내용이 같은 자료입니다(이름·폴더가 달라도 중복 등록하지 않음).'
+        known = con.execute('SELECT id,measurement_id,manifest_json,detail_hash,dis_sha256,review_status FROM sessions ORDER BY id DESC').fetchall()
+        for rid, group, manifest, detail, old_dis, state in known:
+            same_path = manifest and json.loads(manifest).get('dis',{}).get('path') == str(sd.dis_path.resolve())
+            if state != 'pending' and manifest and ((fp['detail'] and fp['detail']==detail) or (same_path and sha==old_dis)):
+                parent = rid
+                break
+        if parent:
+            old_manifest = json.loads(next(r[2] for r in known if r[0]==parent))
+            changed = [role for role in sorted(set(old_manifest)|set(fp['manifest']))
+                       if old_manifest.get(role,{}).get('sha256') != fp['manifest'].get(role,{}).get('sha256')]
+            note = f'재처리본: 이전 #{parent}. 바뀐 파일: ' + ', '.join(changed) + '. 비교할 버전 하나만 체크하세요.'
+        else:
+            candidates = con.execute("SELECT id FROM sessions WHERE anchor_hash=? OR dis_sha256=? OR (folder=? AND session_name=?)",
+                         (fp['anchor'],sha,str(sd.files.folder),sd.files.name)).fetchall()
+            if candidates:
+                pending = True
+                note = '동일 측정 여부 확인 필요: ' + ', '.join(f'#{r[0]}' for r in candidates)
         sec = sd.dis.sections
         station = (sec.get("Site Information", {}).get("Station Number") or "").strip() or None
         code, code_src = None, None
@@ -176,6 +255,11 @@ def register_session(db_path: Path, sd: SessionData, memo: str = "") -> tuple[st
              q_unit(sd), time_basis(sd), min(starts) if starts else None, _now(), memo or None,
              code, code_src, station, lat, lon, n_gps))
         sid = cur.lastrowid
+        group = con.execute('SELECT measurement_id FROM sessions WHERE id=?',(parent,)).fetchone()[0] if parent else sid
+        con.execute("""UPDATE sessions SET content_hash=?,detail_hash=?,anchor_hash=?,manifest_json=?,
+                       measurement_id=?,previous_id=?,review_status=?,review_note=?,compare_selected=? WHERE id=?""",
+                    (fp['content'],fp['detail'],fp['anchor'],json.dumps(fp['manifest'],ensure_ascii=False),group,
+                     parent,'pending' if pending else 'confirmed',note,0 if parent or pending else 1,sid))
         for r in sd.records:
             raw = r.dis_row_raw or {}
             v = r.dis_values
@@ -189,14 +273,64 @@ def register_session(db_path: Path, sd: SessionData, memo: str = "") -> tuple[st
                  v.get("total_q"), v.get("pct"), r.n_rows.get("sum"), r.section_summary or None,
                  r.gauge.get("gh_start"), r.gauge.get("gh_start_time"), r.gauge.get("gh_end"),
                  r.gauge.get("gh_end_time"), r.gauge.get("unit")))
+        if parent:
+            copy_inputs(con,parent,sid)
+        if selected_nums is not None:
+            con.execute('UPDATE transects SET compare_selected=0,selection_explicit=1 WHERE session_id=?',(sid,))
+            con.executemany('UPDATE transects SET compare_selected=1 WHERE session_id=? AND num=?',[(sid,int(n)) for n in selected_nums])
         keep = [c for c in sd.checks if c.level != LEVEL_INFO or c.category in ("회차 포함/제외", "사용한 .dis")]
         con.executemany("INSERT INTO reg_checks(session_id, level, category, target, message) VALUES(?,?,?,?,?)",
                         [(sid, c.level, c.category, c.target, c.message) for c in keep])
+    if pending:
+        return "review", sid, note
+    if parent:
+        return "version", sid, note
     return "added", sid, f"{sd.files.name} ({sd.dis_path.name}): 등록 완료 (회차 {len(sd.records)}개)"
+
+
+def resolve_measurement(db_path, sid, previous_id=None):
+    from rsq_compare.core.identity import copy_inputs
+    with connect(db_path) as con:
+        current = con.execute('SELECT review_status FROM sessions WHERE id=?',(sid,)).fetchone()
+        if not current or current[0] != 'pending':
+            raise ValueError('확인 대상 측정만 관계를 지정할 수 있습니다.')
+        group = sid
+        if previous_id is not None:
+            p = con.execute('SELECT measurement_id,review_status FROM sessions WHERE id=?',(previous_id,)).fetchone()
+            if not p or previous_id==sid or p[1]=='pending':
+                raise ValueError('확인된 이전 측정을 선택하세요.')
+            group = p[0] or previous_id
+            copy_inputs(con,previous_id,sid)
+        con.execute("""UPDATE sessions SET measurement_id=?,previous_id=?,review_status='confirmed',
+                       review_note=?,compare_selected=0 WHERE id=?""",
+                    (group,previous_id,'사용자 확인: 재처리본' if previous_id else '사용자 확인: 별도 측정',sid))
+
+
+def transect_selection(db_path, sd, selected=None):
+    from rsq_compare.core.identity import fingerprint
+    if not Path(db_path).exists():
+        return None
+    content = fingerprint(sd)['content']
+    with connect(db_path) as con:
+        row = con.execute('SELECT id FROM sessions WHERE content_hash=?',(content,)).fetchone()
+        if not row:
+            return None
+        if selected is not None:
+            con.execute('UPDATE transects SET compare_selected=0,selection_explicit=1 WHERE session_id=?',(row[0],))
+            con.executemany('UPDATE transects SET compare_selected=1 WHERE session_id=? AND num=?',[(row[0],int(n)) for n in selected])
+        return [r[0] for r in con.execute('SELECT num FROM transects WHERE session_id=? AND compare_selected=1 ORDER BY num',(row[0],))]
+
+
+def set_comparison_selected(db_path, sid, selected):
+    with connect(db_path) as con:
+        con.execute('UPDATE sessions SET compare_selected=? WHERE id=?',(int(bool(selected)),int(sid)))
 
 
 def delete_sessions(db_path: Path, ids: list[int]) -> int:
     with connect(db_path) as con:
+        for rid,group,previous in con.execute('SELECT id,measurement_id,previous_id FROM sessions'):
+            if rid not in ids and (group in ids or previous in ids):
+                raise ValueError('다른 버전이 연결된 이전 등록은 단독 삭제할 수 없습니다.')
         n = 0
         for i in ids:
             n += con.execute("DELETE FROM sessions WHERE id=?", (int(i),)).rowcount
@@ -283,7 +417,8 @@ def read_table(db_path: Path, sql: str, params=()) -> pd.DataFrame:
 
 def sessions_df(db_path: Path) -> pd.DataFrame:
     return read_table(db_path, """
-        SELECT s.*, r.ref_q, r.unit AS ref_unit, r.source AS ref_source, r.memo AS ref_memo,
+        SELECT s.*, EXISTS(SELECT 1 FROM catalog_entries ce WHERE ce.site_code=s.site_code
+          AND NOT EXISTS(SELECT 1 FROM site_catalog sc WHERE sc.site_code=ce.site_code)) AS catalog_conflict, r.ref_q, r.unit AS ref_unit, r.source AS ref_source, r.memo AS ref_memo,
                c.river_name, c.sido, c.sigungu, c.sensor_type, c.interval_min,
                c.aws_id, c.aws_name, c.aws_dist_km, c.obs_lat, c.obs_lon
         FROM sessions s LEFT JOIN reference_q r ON r.session_id = s.id
@@ -378,19 +513,10 @@ def import_reference_file(db_path: Path, path: Path) -> pd.DataFrame:
 
 # ---------------------------------------------------------------- v0.4: 지점 정보 / 수위 / 소하천 목록
 def save_catalog(db_path: Path, cat: pd.DataFrame, source_file: Path) -> int:
-    """소하천 목록을 통째로 교체 저장(필요한 열만)."""
+    from rsq_compare.core.catalog import store_catalog
     init_db(db_path)
-    cols = [c for c in cat.columns]
     with connect(db_path) as con:
-        con.execute("DELETE FROM site_catalog")
-        con.executemany(
-            f"INSERT INTO site_catalog({','.join(cols)}, source_file, imported_at) VALUES({','.join('?' * (len(cols) + 2))})",
-            [tuple(None if (v is None or (isinstance(v, float) and pd.isna(v))) else v for v in row) + (str(source_file), _now())
-             for row in cat.itertuples(index=False)])
-        # 아직 소하천명이 비어 있는 등록 세션의 Station Number 가 목록 코드와 같으면 자동 연결
-        con.execute("""UPDATE sessions SET site_code = station_number_raw, site_code_source = 'RSQ 기록(Station Number)'
-                       WHERE site_code IS NULL AND station_number_raw IN (SELECT site_code FROM site_catalog)""")
-    return len(cat)
+        return store_catalog(con,cat,source_file)
 
 
 def catalog_df(db_path: Path) -> pd.DataFrame:

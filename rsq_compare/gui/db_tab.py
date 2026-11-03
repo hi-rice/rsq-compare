@@ -40,6 +40,8 @@ from PySide6.QtWidgets import (
 )
 
 from rsq_compare.core import db
+from rsq_compare.core.identity import validate_comparison
+from rsq_compare.core.catalog import catalog_review, resolve_catalog
 from rsq_compare.core.batch import import_folder
 from rsq_compare.core.db_export import _tr_view, export_db
 from rsq_compare.core.external import (
@@ -53,7 +55,7 @@ from rsq_compare.core.external import (
 )
 from rsq_compare.core.multi import NOTE_MULTI, fig_external, fig_reference, fig_sessions, reference_by_transect, session_summary
 from rsq_compare.core.parsers import to_number
-from rsq_compare.core.sites import CODE_RE, nearest_sites, read_catalog_file, site_text
+from rsq_compare.core.sites import CODE_RE, nearest_sites, read_catalog_file, site_text, KOR_LABEL
 from rsq_compare.gui.df_model import DataFrameModel
 
 EDIT_BG = QColor("#fffbe6")
@@ -220,8 +222,12 @@ class DbTab(QWidget):
         self.b_ref = QPushButton("비교 유량 양식 불러오기")
         self.b_ext = QPushButton("외부 자료(수위·유량·강우) 불러오기")
         self.b_export = QPushButton("💾 비교 결과 저장")
+        self.b_review = QPushButton("측정 관계 확인")
+        self.b_review.clicked.connect(self.review_measurement)
+        self.b_code_review = QPushButton("코드 행 선택")
+        self.b_code_review.clicked.connect(self.review_code)
         self.b_del = QPushButton("체크한 등록 삭제")
-        for b in (self.b_import, self.b_cat, self.b_ref, self.b_ext, self.b_export, self.b_del):
+        for b in (self.b_import, self.b_cat, self.b_ref, self.b_ext, self.b_export, self.b_del, self.b_review, self.b_code_review):
             r2.addWidget(b)
         r2.addStretch(1)
         v.addLayout(r2)
@@ -318,6 +324,10 @@ class DbTab(QWidget):
         self.tabs.addTab(self.ph_e, "외부 자료 연결")
         self.m_tr = DataFrameModel()
         self.tabs.addTab(make_table(self.m_tr), "회차 전체")
+        self.m_versions = DataFrameModel()
+        self.tabs.addTab(make_table(self.m_versions), "측정 이력")
+        self.m_codes = DataFrameModel()
+        self.tabs.addTab(make_table(self.m_codes), "코드 확인")
         self.m_rep = DataFrameModel()
         self.tabs.addTab(make_table(self.m_rep), "가져오기 보고")
         sp.addWidget(self.tabs)
@@ -368,12 +378,14 @@ class DbTab(QWidget):
         for i, (_, s) in enumerate(self.sess.iterrows()):
             chk = QTableWidgetItem()
             chk.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
-            chk.setCheckState(Qt.Checked)
+            chk.setCheckState(Qt.Checked if s.get("compare_selected",1) else Qt.Unchecked)
+            chk.setToolTip(s.get("review_note") or "")
             self.tbl.setItem(i, 0, chk)
             mean = summ.loc[i, mcol] if mcol else None
             river = _nn(s.get("river_name"))
             code = _nn(s.get("site_code"))
-            vals = [str(s["id"]), s["session_name"], s["dis_file"], s["date_measured"] or "",
+            name = s["session_name"] + (" [확인 필요]" if s.get("review_status")=="pending" else f" [재처리 · 이전 #{int(s.previous_id)}]" if pd.notna(s.get("previous_id")) else "")
+            vals = [str(s["id"]), name, s["dis_file"], s["date_measured"] or "",
                     code or "", river or ("목록에 없음" if code and not self.cat.empty else ""),
                     _nn(s.get("operator")) or "", str(s["n_transects_dis"]),
                     "" if mean is None or pd.isna(mean) else f"{mean:.4f}",
@@ -390,6 +402,12 @@ class DbTab(QWidget):
                 self.tbl.setItem(i, j, it)
         self.tbl.resizeColumnsToContents()
         self.tbl.blockSignals(False)
+        self.m_codes.set_df(catalog_review(self.db_path).rename(columns=KOR_LABEL))
+        version_cols = {'id':'등록ID','measurement_id':'측정 묶음','previous_id':'이전 등록ID','session_name':'세션',
+                        'dis_file':'사용 DIS','review_status':'확인 상태','review_note':'안내','folder':'원본 폴더'}
+        versions = self.sess.reindex(columns=version_cols).rename(columns=version_cols)
+        versions['확인 상태'] = versions['확인 상태'].replace({'confirmed':'확인됨','pending':'확인 필요'})
+        self.m_versions.set_df(versions)
         self.cmb_series.blockSignals(True)
         self.cmb_series.clear()
         for _, r in db.series_df(self.db_path).iterrows():
@@ -410,11 +428,14 @@ class DbTab(QWidget):
         for i in range(self.tbl.rowCount()):
             self.tbl.item(i, C_CHECK).setCheckState(Qt.Checked if on else Qt.Unchecked)
         self.tbl.blockSignals(False)
+        for i in range(self.tbl.rowCount()):
+            db.set_comparison_selected(self.db_path,int(self.tbl.item(i,C_ID).text()),on)
         self.refresh_views()
 
     def _on_item(self, it: QTableWidgetItem):
         row, col = it.row(), it.column()
         if col == C_CHECK:
+            db.set_comparison_selected(self.db_path,int(self.tbl.item(row,C_ID).text()),it.checkState()==Qt.Checked)
             self.refresh_views()
             return
         sid = int(self.tbl.item(row, C_ID).text())
@@ -443,7 +464,9 @@ class DbTab(QWidget):
     def _selected(self):
         ids = self.checked_ids()
         sess = self.sess[self.sess["id"].isin(ids)].reset_index(drop=True) if not self.sess.empty else self.sess
-        tr = db.transects_df(self.db_path, list(sess["id"])) if not sess.empty else pd.DataFrame()
+        validate_comparison(sess)
+        tr = db.transects_df(self.db_path, list(sess["id"]))
+        tr = tr[tr.compare_selected.fillna(1) == 1] if not sess.empty else pd.DataFrame()
         return sess, tr
 
     def refresh_views(self):
@@ -456,7 +479,15 @@ class DbTab(QWidget):
             self.m_tr.set_df(None)
             self.fig_r.set_figure(fig_reference(pd.DataFrame()))
             return
-        sess, tr = self._selected()
+        try:
+            sess, tr = self._selected()
+        except ValueError as e:
+            self.ph_s.show_empty(str(e))
+            self.ph_e.show_empty(str(e))
+            self.m_summ.set_df(None)
+            self.m_ref.set_df(None)
+            self.m_tr.set_df(None)
+            return
         self.refresh_site(self.tbl.currentRow())
         if sess.empty:
             self.ph_s.show_empty("왼쪽 표에서 비교할 세션을 체크하세요.")
@@ -488,6 +519,8 @@ class DbTab(QWidget):
         lines = [f"<b>#{sid} {s['session_name']}</b> ({s['dis_file']})"]
         code = _nn(s.get("site_code"))
         if code:
+            if s.get("catalog_conflict"):
+                lines.append("<b>소하천코드 충돌: 코드 확인 탭에서 행을 확인하세요.</b>")
             lines.append(f"소하천코드: {code}  <span style='color:#666'>(출처: {_nn(s.get('site_code_source')) or ''})</span>")
             c = self.cat[self.cat["site_code"] == code] if not self.cat.empty else pd.DataFrame()
             if not c.empty:
@@ -566,7 +599,15 @@ class DbTab(QWidget):
             self.ph_e.show_empty("외부 자료가 없습니다.\n'외부 자료(수위·유량·강우) 불러오기'로 CSV/엑셀 파일을 추가하세요.\n"
                                  "파일 형식은 자유롭게 — 불러올 때 시각 열과 값 열을 고릅니다.")
             return
-        sess, tr = self._selected()
+        try:
+            sess, tr = self._selected()
+        except ValueError as e:
+            self.ph_s.show_empty(str(e))
+            self.ph_e.show_empty(str(e))
+            self.m_summ.set_df(None)
+            self.m_ref.set_df(None)
+            self.m_tr.set_df(None)
+            return
         if sess.empty:
             return
         info = db.series_df(self.db_path)
@@ -606,9 +647,37 @@ class DbTab(QWidget):
             self.refresh_ext()
 
     # ------------------------------------------------------------ 작업
+    def review_measurement(self):
+        sid = self._current_sid()
+        if sid is None:
+            return
+        options = {'별도 측정으로 확인':None}
+        for _,r in self.sess.iterrows():
+            if r.id != sid and r.review_status != 'pending':
+                options[f"이전 #{int(r.id)} {r.session_name}의 재처리본"] = int(r.id)
+        label,ok = QInputDialog.getItem(self,'측정 관계 확인','파일 내용과 이전 등록을 확인한 뒤 선택하세요.',list(options),0,False)
+        if ok:
+            try:
+                db.resolve_measurement(self.db_path,sid,options[label])
+            except ValueError as e:
+                QMessageBox.warning(self,'측정 관계',str(e))
+            self.reload()
+
+    def review_code(self):
+        rows = catalog_review(self.db_path)
+        if rows.empty:
+            return
+        chosen,ok = QInputDialog.getInt(self,'코드 행 선택','코드 확인 표의 사용할 목록행ID',int(rows.iloc[0]['목록행ID']),1)
+        row = rows[rows['목록행ID']==chosen]
+        if ok and not row.empty:
+            info = row.iloc[0]
+            if QMessageBox.question(self,'코드 확인',f"{info['site_code']} / {info['river_name']} / 원본 행 {info['원본 행']}\n이 행을 사용하겠습니까?") == QMessageBox.Yes:
+                resolve_catalog(self.db_path,chosen)
+                self.reload()
+
     def register(self, sd):
         try:
-            status, _sid, msg = db.register_session(self.db_path, sd)
+            status, _sid, msg = db.register_session(self.db_path, sd, selected_nums=self.main.selected_nums())
         except Exception as e:  # noqa: BLE001
             QMessageBox.warning(self, "등록 실패", f"누적 DB에 등록하지 못했습니다.\n{e}")
             return
@@ -629,7 +698,7 @@ class DbTab(QWidget):
         self.main._set_busy(False, "가져오기 완료")
         self.m_rep.set_df(rep)
         self.reload()
-        self.tabs.setCurrentIndex(5)
+        self.tabs.setCurrentIndex(self.tabs.count()-1)
         n_new = int((rep["결과"] == "새로 등록").sum()) if "결과" in rep else 0
         n_skip = int((rep["결과"] == "이미 등록됨(건너뜀)").sum()) if "결과" in rep else 0
         QMessageBox.information(self, "가져오기 완료",
@@ -715,7 +784,10 @@ class DbTab(QWidget):
             return
         if QMessageBox.question(self, "삭제 확인", f"체크한 등록 {len(ids)}건을 DB에서 삭제할까요?\n"
                                                    "(측정 원본 파일은 지워지지 않고, 다시 가져올 수 있습니다)") == QMessageBox.Yes:
-            db.delete_sessions(self.db_path, ids)
+            try:
+                db.delete_sessions(self.db_path, ids)
+            except ValueError as e:
+                QMessageBox.warning(self,'등록 삭제',str(e))
             self.reload()
 
     def export(self):

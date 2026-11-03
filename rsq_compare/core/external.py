@@ -205,6 +205,10 @@ def match_to_transects(tr: pd.DataFrame, sess: pd.DataFrame, values: pd.DataFram
                 continue
             base["소하천 일치"] = "측정 직접 지정"
         elif site_code:
+            if sid in sinfo.index and sinfo.loc[sid].get('catalog_conflict',0):
+                if s_code == site_code:
+                    rows.append({**base, '연결': '소하천코드 충돌 확인 필요'})
+                continue
             if s_code != site_code:
                 continue  # 다른 소하천(또는 코드 미입력) 세션에는 붙이지 않음
             base["소하천 일치"] = "일치"

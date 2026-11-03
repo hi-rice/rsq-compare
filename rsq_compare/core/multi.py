@@ -16,7 +16,7 @@ from matplotlib.figure import Figure
 from rsq_compare.core.plots import _ensure_font
 
 NOTE_MULTI = ("세션별 통계는 각 세션에 등록된 .dis의 회차별 Total Q(=RSQ에서 체크돼 .dis에 들어간 회차)로 계산한 "
-              "단순 비교값입니다. 공식 최종유량·판정이 아닙니다.")
+              "사용자가 저장한 회차 선택을 적용한 단순 비교값입니다. 공식 최종유량·판정이 아닙니다.")
 
 
 def session_label(row) -> str:

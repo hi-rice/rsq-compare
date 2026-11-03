@@ -54,6 +54,13 @@ def main(argv=None) -> int:
     scope.add_argument("--session-id", type=int, help="연결할 측정 등록ID")
     p.add_argument("--rain-type", choices=RAIN_TYPES, default="미확인")
     p.add_argument("--rain-interval", type=float, help="강우 기록 간격(분), 구간값은 끝 시각")
+    p = sub.add_parser("review", help="측정 관계 확인")
+    p.add_argument("--db", required=True)
+    p.add_argument("--id", type=int, required=True)
+    p.add_argument("--previous", type=int, help="재처리 이전 등록ID. 생략하면 별도 측정으로 확인")
+    p = sub.add_parser("catalog-review", help="소하천코드 모든 행·충돌 표시")
+    p.add_argument("--db", required=True)
+    p.add_argument("--choose", type=int, help="확인 후 사용할 목록행ID")
     p = sub.add_parser("list", help="등록된 세션 목록")
     p.add_argument("--db", required=True)
     p = sub.add_parser("export", help="비교 결과 엑셀·그래프 저장")
@@ -64,7 +71,17 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     dbp = Path(a.db)
 
-    if a.cmd == "import":
+    if a.cmd == 'review':
+        db.init_db(dbp)
+        db.resolve_measurement(dbp,a.id,a.previous)
+        print('측정 관계를 저장했습니다. 비교할 버전을 체크하세요.')
+    elif a.cmd == 'catalog-review':
+        from rsq_compare.core.catalog import catalog_review,resolve_catalog
+        db.init_db(dbp)
+        if a.choose is not None:
+            resolve_catalog(dbp,a.choose)
+        print(catalog_review(dbp).to_string(index=False))
+    elif a.cmd == "import":
         rep = import_folder(Path(a.folder), dbp, progress=print)
         print(rep[["세션", "사용한 .dis", "결과"]].to_string(index=False))
         if a.report:
@@ -85,11 +102,12 @@ def main(argv=None) -> int:
         db.init_db(dbp)
         s = db.sessions_df(dbp)
         print(s[["id", "session_name", "dis_file", "site_code", "river_name", "n_transects_dis", "dis_total_q_raw",
-                 "ref_q"]].to_string(index=False)
+                 "ref_q", "measurement_id", "previous_id", "review_status", "review_note", "compare_selected"]].to_string(index=False)
               if not s.empty else "등록된 세션 없음")
     elif a.cmd == "export":
+        db.init_db(dbp)
         s = db.sessions_df(dbp)
-        ids = [int(x) for x in a.ids.split(",")] if a.ids else list(s["id"])
+        ids = [int(x) for x in a.ids.split(",")] if a.ids else list(s.loc[s.compare_selected == 1,"id"])
         res = export_db(dbp, ids, Path(a.out), a.margin, progress=print)
         print(f"저장 폴더: {res['folder']}")
     return 0

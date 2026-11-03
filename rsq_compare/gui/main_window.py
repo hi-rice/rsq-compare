@@ -327,7 +327,7 @@ class MainWindow(QMainWindow):
         self.cmb_section.currentIndexChanged.connect(lambda _i: self._refresh_detail(keep_section=True))
         self.btn_save.clicked.connect(self.save_results)
         self.btn_reg.clicked.connect(lambda: self.sd is not None and self.dbtab.register(self.sd))
-        self.lst.itemChanged.connect(lambda _it: self._refresh_compare())
+        self.lst.itemChanged.connect(self._selection_changed)
         self.lst.currentRowChanged.connect(self._on_list_row)
         self.cmb_detail.currentIndexChanged.connect(lambda _i: self._refresh_detail(keep_section=False))
         self.btn_all.clicked.connect(lambda: self._check_all(True))
@@ -445,12 +445,29 @@ class MainWindow(QMainWindow):
         self._refresh_all()
 
     # ------------------------------------------------------------ 목록
+    def _selection_key(self):
+        import hashlib
+        return 'transects/' + hashlib.sha256(str(self.sd.dis_path.resolve() if self.sd.dis_path else self.sd.files.folder).encode()).hexdigest()
+
+    def _selection_changed(self, *_):
+        if self.sd is not None:
+            self.settings.setValue(self._selection_key(), self.selected_nums())
+            if hasattr(self,'dbtab'):
+                from rsq_compare.core import db
+                db.transect_selection(self.dbtab.db_path,self.sd,self.selected_nums())
+        self._refresh_compare()
+
     def _fill_list(self):
         self.lst.blockSignals(True)
         self.lst.clear()
         self.cmb_detail.blockSignals(True)
         self.cmb_detail.clear()
         u = q_unit(self.sd) if self.sd else ""
+        saved = self.settings.value(self._selection_key(), None)
+        if saved is None and hasattr(self,'dbtab'):
+            from rsq_compare.core import db
+            saved = db.transect_selection(self.dbtab.db_path,self.sd)
+        saved = {int(n) for n in saved} if isinstance(saved,(list,tuple)) else None
         for r in self.sd.records:
             if r.total_q is not None:
                 txt = f"{r.label}   Q = {r.total_q:.4f} {u}"
@@ -461,7 +478,7 @@ class MainWindow(QMainWindow):
             it = QListWidgetItem(txt)
             it.setData(Qt.UserRole, r.num)
             it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
-            it.setCheckState(Qt.Checked if r.total_q is not None else Qt.Unchecked)
+            it.setCheckState(Qt.Checked if (r.num in saved if saved is not None else r.total_q is not None) else Qt.Unchecked)
             it.setToolTip(r.status)
             if not r.has_summary:
                 it.setForeground(Qt.darkRed)
@@ -475,7 +492,7 @@ class MainWindow(QMainWindow):
         for i in range(self.lst.count()):
             self.lst.item(i).setCheckState(Qt.Checked if on else Qt.Unchecked)
         self.lst.blockSignals(False)
-        self._refresh_compare()
+        self._selection_changed()
 
     def selected_nums(self) -> list[int]:
         return [self.lst.item(i).data(Qt.UserRole) for i in range(self.lst.count())
