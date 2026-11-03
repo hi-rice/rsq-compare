@@ -298,6 +298,9 @@ def _check_start_time(rec: TransectRecord, checks: list[CheckItem]) -> str:
         t = parse_rsq_time(rec.first_time_raw.get(kind))
         if dis_t is None or t is None:
             continue
+        if (t.tzinfo is None) != (dis_t.tzinfo is None):
+            checks.append(CheckItem(LEVEL_WARN, "시간 기준", rec.label, "시간대 유무가 달라 시작 시각 비교 보류"))
+            continue
         diff = (t - dis_t).total_seconds()
         out.append((kind, diff))
     if not out:
@@ -334,7 +337,8 @@ def _check_time_offsets(records, store, checks):
             common = dt.index.intersection(vt.index)
             if dt.index.has_duplicates or vt.index.has_duplicates:
                 continue
-            diffs = [(vt[i] - dt[i]).total_seconds() for i in common if vt[i] and dt[i]]
+            diffs = [(vt[i] - dt[i]).total_seconds() for i in common if pd.notna(vt[i]) and pd.notna(dt[i])
+                     and (vt[i].tzinfo is None) == (dt[i].tzinfo is None)]
             per_pair.setdefault(kind, Counter()).update(diffs)
     for kind, cnt in per_pair.items():
         if not cnt:

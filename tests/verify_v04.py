@@ -138,10 +138,11 @@ sid_r = db.add_series(D, "옥계 AWS 강우(가상)", "mm", "UTC+9 (한국시간
                       list(vr["value"]), rain, 0, site_code=CODE, kind="강우")
 mr = match_to_transects(tr, sess, db.series_values(D, sid_r), "UTC+9 (한국시간)", 0, site_code=CODE, kind="강우", unit="mm")
 r = mr[(mr["세션"] == "fieldA_20261029_105656") & (mr["회차"] == "T01")].iloc[0]
-check("강우: T01 창(10:40:18~10:42:08) 안 10:41(1.0)+10:42(빈값) → 합계 1.0, 창 밖 10:40은 제외, 빈값은 0 아님",
-      r["합계(강우일 때 참고)"] == 1.0 and r["시간창 안 자료 수"] == 2 and r["시간창 안 빈값 수"] == 1)
+check("강우 종류 미확인·빈값이 있으면 합산 안 함",
+      "시간창 강우량(mm)" not in r and r["강우 집계"] == "종류·단위 확인 필요"
+      and r["시간창 안 자료 수"] == 2 and r["시간창 안 빈값 수"] == 1)
 m_none = match_to_transects(tr, sess, db.series_values(D, sid_r), "UTC+9 (한국시간)", 0, site_code=None, kind="강우")
-check("소하천 미지정 자료는 시간만으로 연결 + 표시", (m_none["소하천 일치"] == "소하천 미지정 자료(시간만으로 연결)").all())
+check("소하천·측정 미지정 자료는 연결 보류", (m_none["연결"] == "연결 대상 지정 필요").all())
 
 print("--- 세션 요약·엑셀·민감정보 ---")
 summ = session_summary(sess, tr)

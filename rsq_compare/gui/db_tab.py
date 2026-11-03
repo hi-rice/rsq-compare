@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import pandas as pd
@@ -27,6 +28,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QInputDialog,
     QMessageBox,
     QPushButton,
     QSplitter,
@@ -42,11 +44,11 @@ from rsq_compare.core.batch import import_folder
 from rsq_compare.core.db_export import _tr_view, export_db
 from rsq_compare.core.external import (
     KIND_CHOICES,
+    RAIN_TYPES,
     TIME_BASIS_CHOICES,
     extract_series,
     guess_time_column,
     match_to_transects,
-    parse_offset_hours,
     read_raw_table,
 )
 from rsq_compare.core.multi import NOTE_MULTI, fig_external, fig_reference, fig_sessions, reference_by_transect, session_summary
@@ -68,7 +70,7 @@ def _nn(v):
 class SeriesDialog(QDialog):
     """외부 파일의 열을 골라 시계열로 불러오는 창. 형식을 미리 알 수 없으므로 사용자가 고른다."""
 
-    def __init__(self, parent, path: Path, raw: pd.DataFrame, catalog: pd.DataFrame):
+    def __init__(self, parent, path: Path, raw: pd.DataFrame, catalog: pd.DataFrame, sessions: pd.DataFrame | None = None):
         super().__init__(parent)
         self.setWindowTitle(f"외부 자료 불러오기 — {path.name}")
         self.resize(760, 560)
@@ -81,9 +83,14 @@ class SeriesDialog(QDialog):
         self.basis.addItems(TIME_BASIS_CHOICES)
         self.site = QComboBox()
         self.site.setEditable(True)
-        self.site.addItem("(지정 안 함 — 시간만으로 연결)", None)
+        self.site.addItem("(지점을 고르거나 측정 지정)", None)
         for _, r in catalog.iterrows():
             self.site.addItem(f"{r['site_code']} {r['river_name']} ({r['sigungu'] or ''})", r["site_code"])
+        self.target = QComboBox()
+        self.target.addItem("(측정 지정 안 함)", None)
+        if sessions is not None:
+            for _, r in sessions.iterrows():
+                self.target.addItem(f"#{int(r['id'])} {r['session_name']}", int(r['id']))
         self.prefix = QLineEdit(path.stem)
         # 파일 안에 소하천코드(숫자 11자리)만 들어 있는 열이 있으면 자동 인식
         self.code_note = ""
@@ -102,8 +109,9 @@ class SeriesDialog(QDialog):
                     self.code_note = f"⚠ '{c}' 열에 소하천코드 {len(vals)}개가 섞여 있음"
                 break
         f.addRow("시각 열", self.tcol)
-        f.addRow("시간 기준", self.basis)
+        f.addRow("시간대 없는 값의 기준", self.basis)
         f.addRow("소하천코드", self.site)
+        f.addRow("측정 직접 지정", self.target)
         f.addRow("이름", self.prefix)
         v.addLayout(f)
         if self.code_note:
@@ -111,8 +119,8 @@ class SeriesDialog(QDialog):
             cn.setStyleSheet("color:#1d4ed8;" if not self.code_note.startswith("⚠") else "color:#b91c1c; font-weight:bold;")
             v.addWidget(cn)
         v.addWidget(QLabel("<b>값 열</b>"))
-        self.tbl = QTableWidget(0, 4)
-        self.tbl.setHorizontalHeaderLabels(["사용", "열 이름", "자료 종류", "단위"])
+        self.tbl = QTableWidget(0, 6)
+        self.tbl.setHorizontalHeaderLabels(["사용", "열 이름", "자료 종류", "단위", "강우 종류", "기록 간격(분)"])
         for c in raw.columns:
             i = self.tbl.rowCount()
             self.tbl.insertRow(i)
@@ -129,9 +137,14 @@ class SeriesDialog(QDialog):
                                               ("강우", ("강우", "강수", "rain", "RN"))] if any(x in c for x in keys)), "기타")
             kind.setCurrentText(guess)
             self.tbl.setCellWidget(i, 2, kind)
-            self.tbl.setItem(i, 3, QTableWidgetItem({"수위": "m", "유량": "m³/s", "강우": "mm"}.get(guess, "")))
+            self.tbl.setItem(i, 3, QTableWidgetItem({"수위": "m", "유량": "m³/s"}.get(guess, "")))
+            rain = QComboBox()
+            rain.addItems(RAIN_TYPES)
+            self.tbl.setCellWidget(i, 4, rain)
+            self.tbl.setItem(i, 5, QTableWidgetItem(""))
         self.tbl.resizeColumnsToContents()
         v.addWidget(self.tbl, 1)
+        v.addWidget(QLabel("강우 구간값은 구간 끝 시각을 사용합니다. 종류·단위·간격을 확인하세요."))
         v.addWidget(QLabel("<b>미리보기</b> (앞 5행)"))
         prev = QTableWidget(min(5, len(raw)), len(raw.columns))
         prev.setHorizontalHeaderLabels(list(raw.columns))
@@ -150,12 +163,29 @@ class SeriesDialog(QDialog):
         for i in range(self.tbl.rowCount()):
             if self.tbl.item(i, 0).checkState() == Qt.Checked:
                 out.append((self.tbl.item(i, 1).text(), self.tbl.cellWidget(i, 2).currentText(),
-                            (self.tbl.item(i, 3).text() if self.tbl.item(i, 3) else "").strip()))
+                            (self.tbl.item(i, 3).text() if self.tbl.item(i, 3) else "").strip(),
+                            self.tbl.cellWidget(i, 4).currentText(), self.tbl.item(i, 5).text().strip()))
         return out
 
+    def accept(self):
+        if not self.site_code() and self.target.currentData() is None:
+            QMessageBox.warning(self, "연결 대상", "지점이나 측정을 지정하세요.")
+            return
+        for _, kind, unit, rain, interval in self.chosen():
+            if kind == "강우" and rain in ("구간 강우량", "누적 강우량"):
+                try:
+                    if float(interval) <= 0 or not math.isfinite(float(interval)):
+                        raise ValueError
+                except ValueError:
+                    QMessageBox.warning(self, "강우 간격", "기록 간격을 분 단위로 입력하세요.")
+                    return
+        super().accept()
+
     def site_code(self):
+        if self.target.currentData() is not None:
+            return None
         d = self.site.currentData()
-        if d:
+        if d and self.site.currentText() == self.site.itemText(self.site.currentIndex()):
             return d
         t = self.site.currentText().strip().split(" ")[0]
         return t if CODE_RE.match(t) else None
@@ -268,6 +298,9 @@ class DbTab(QWidget):
         self.spin_margin.setToolTip("회차 시간창이 짧아 자료가 없을 때 앞뒤로 넓혀 봅니다(보간은 하지 않음). "
                                     "예: FEWP 2분 간격이면 1~2분")
         eh.addWidget(self.spin_margin)
+        self.b_target = QPushButton("연결 대상 지정")
+        self.b_target.clicked.connect(self.assign_series_target)
+        eh.addWidget(self.b_target)
         self.b_del_series = QPushButton("이 자료 삭제")
         eh.addWidget(self.b_del_series)
         eh.addStretch(1)
@@ -277,6 +310,8 @@ class DbTab(QWidget):
         es = QSplitter(Qt.Vertical)
         es.addWidget(self.fig_e)
         es.addWidget(make_table(self.m_ext))
+        self.m_ext_values = DataFrameModel()
+        es.addWidget(make_table(self.m_ext_values))
         es.setSizes([380, 260])
         ev.addWidget(es, 1)
         self.ph_e = Placeholder(w, "")
@@ -538,14 +573,37 @@ class DbTab(QWidget):
         s = info[info["id"] == sid].iloc[0]
         vals = db.series_values(self.db_path, sid)
         m = match_to_transects(tr, sess, vals, s["time_basis"], self.spin_margin.value(),
-                               site_code=_nn(s.get("site_code")), kind=_nn(s.get("kind")), unit=_nn(s.get("unit")))
-        d_off = next((parse_offset_hours(b) for b in sess["time_basis"] if parse_offset_hours(b) is not None), None)
-        s_off = parse_offset_hours(s["time_basis"])
-        shift = (d_off - s_off) if (d_off is not None and s_off is not None) else 0
-        note = f"외부 기준 {s['time_basis']}" + (f", {shift:+g}시간 이동" if shift else ", 이동 없음")
+                               site_code=_nn(s.get("site_code")), kind=_nn(s.get("kind")), unit=_nn(s.get("unit")),
+                               target_session_id=_nn(s.get("target_session_id")),
+                               rain_type=_nn(s.get("rain_type")), rain_interval_min=_nn(s.get("rain_interval_min")),
+                               n_dropped=int(_nn(s.get("n_dropped")) or 0))
+        shift = 0
+        note = "UTC 기준 · 원문 시간대 우선"
         self.fig_e.set_figure(fig_external(vals, m, s["name"], s["unit"] or "", note, shift))
         self.m_ext.set_df(m)
+        audit = vals[["t_raw", "time_applied", "t_utc", "value", "시각 보존 안내"]].copy()
+        audit["t_utc"] = audit["t_utc"].map(lambda t: "" if pd.isna(t) else t.isoformat())
+        self.m_ext_values.set_df(audit.rename(columns={"t_raw": "시각 원문", "time_applied": "적용 기준",
+                                                      "t_utc": "시각 UTC", "value": "값"}))
         self.ph_e.show_content()
+
+    def assign_series_target(self):
+        sid = self.cmb_series.currentData()
+        if sid is None:
+            return
+        options = {}
+        for _, r in db.sessions_df(self.db_path).iterrows():
+            options[f"측정 #{int(r['id'])}: {r['session_name']}"] = (None, int(r['id']))
+        for _, r in self.cat.iterrows():
+            options[f"지점 {r['site_code']}: {r['river_name']}"] = (r['site_code'], None)
+        if not options:
+            QMessageBox.information(self, "연결 대상", "먼저 측정이나 지점 목록을 불러오세요.")
+            return
+        label, ok = QInputDialog.getItem(self, "연결 대상", "연결할 지점 또는 측정", list(options), 0, False)
+        if ok:
+            code, target = options[label]
+            db.set_series_target(self.db_path, sid, code, target)
+            self.refresh_ext()
 
     # ------------------------------------------------------------ 작업
     def register(self, sd):
@@ -615,7 +673,7 @@ class DbTab(QWidget):
             QMessageBox.warning(self, "파일 읽기 실패", str(e))
             return
         dlg = SeriesDialog(self, Path(p), raw, self.cat if not self.cat.empty else pd.DataFrame(
-            columns=["site_code", "river_name", "sigungu"]))
+            columns=["site_code", "river_name", "sigungu"]), db.sessions_df(self.db_path))
         if dlg.exec() != QDialog.Accepted:
             return
         chosen = dlg.chosen()
@@ -623,15 +681,17 @@ class DbTab(QWidget):
             QMessageBox.information(self, "외부 자료", "체크한 값 열이 없습니다.")
             return
         msgs = []
-        for col, kind, unit in chosen:
+        for col, kind, unit, rain, interval in chosen:
             try:
                 vals, dropped = extract_series(raw, dlg.tcol.currentText(), col)
                 if vals.empty:
                     msgs.append(f"'{col}': 시각을 하나도 읽지 못해 건너뜀")
                     continue
                 db.add_series(self.db_path, f"{dlg.prefix.text().strip()} {col}".strip(), unit, dlg.basis.currentText(),
-                              [t.strftime("%Y-%m-%d %H:%M:%S") for t in vals["t"]], list(vals["value"]), Path(p),
-                              dropped, site_code=dlg.site_code(), kind=kind)
+                              list(vals["t_raw"]), list(vals["value"]), Path(p),
+                              dropped, site_code=dlg.site_code(), kind=kind, target_session_id=dlg.target.currentData(),
+                              rain_type=rain if kind == "강우" else None,
+                              rain_interval_min=float(interval) if kind == "강우" and interval else None)
                 msgs.append(f"'{col}' [{kind}]: {len(vals)}개 값, 시각 못 읽어 뺀 행 {dropped}개, "
                             f"빈값 {int(vals['value'].isna().sum())}개(0으로 바꾸지 않음)")
             except Exception as e:  # noqa: BLE001

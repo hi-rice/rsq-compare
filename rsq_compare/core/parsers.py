@@ -7,8 +7,8 @@
 
 원칙
 - 빈칸/#N/A/NaN 은 '값 없음(NaN)'으로 두고 0으로 바꾸지 않는다.
-- 시간 문자열은 원문을 보존한다. '오전/오후' 표기를 24시간제로 읽는 것만 하고,
-  시간대(UTC/KST) 변환은 하지 않는다.
+- 시간 문자열은 원문을 보존한다. 명시된 시간대는 버리지 않으며,
+  시간대 없는 값에 어떤 기준을 적용할지는 비교 단계에서 결정한다.
 """
 from __future__ import annotations
 
@@ -75,10 +75,14 @@ _TIME_RE = re.compile(
 
 def parse_rsq_time(raw) -> datetime | None:
     """'2026-10-29 오전 1:40:18' / '2026-10-29 10:40:18' 을 읽는다.
-    시간대 정보는 붙이지 않으며 어떤 변환도 하지 않는다."""
+    ISO 시각의 Z/오프셋은 보존한다. 시간대 없는 값은 그대로 둔다."""
     if raw is None or (isinstance(raw, float) and pd.isna(raw)):
         return None
-    m = _TIME_RE.search(str(raw))
+    try:
+        return pd.Timestamp(str(raw).strip())
+    except (ValueError, TypeError):
+        pass
+    m = _TIME_RE.fullmatch(str(raw).strip())
     if not m:
         return None
     h = int(m["h"])

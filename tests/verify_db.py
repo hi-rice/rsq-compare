@@ -104,24 +104,24 @@ ext.write_text("시각,값\n2026-10-29 01:40:00,0.81\n2026-10-29 01:41:00,\n2026
 vals, dropped, _ = read_timeseries(ext)
 check("시각 못 읽는 행 1개 제외, 빈값은 NaN 유지", dropped == 1 and vals["value"].isna().sum() == 1)
 sid_s = db.add_series(D, "수위(가상)", "m", "UTC", [t.strftime("%Y-%m-%d %H:%M:%S") for t in vals["t"]],
-                      list(vals["value"]), ext, dropped)
+                      list(vals["value"]), ext, dropped, target_session_id=sid3)
 sess = db.sessions_df(D)
 tr3 = db.transects_df(D, [sid3])
-m = match_to_transects(tr3, sess, db.series_values(D, sid_s), "UTC")
+m = match_to_transects(tr3, sess, db.series_values(D, sid_s), "UTC", target_session_id=sid3)
 t01 = m[m["회차"] == "T01"].iloc[0]
-check("UTC 외부자료 → +9시간 이동해서 T01(10:40:18~10:42:08)에 연결",
-      t01["시간창 안 자료 수"] == 2 and "+9시간" in t01["시간 맞춤"] and t01["시간창 안 빈값 수"] == 1,
+check("UTC로 비교해서 T01(10:40:18~10:42:08)에 연결",
+      t01["시간창 안 자료 수"] == 2 and "UTC" in t01["시간 맞춤"] and t01["시간창 안 빈값 수"] == 1,
       f"{t01['시간창 안 자료 수']}개, {t01['시간 맞춤']}")
 check("시간창 평균은 빈값 제외(0으로 안 바꿈): 0.83", t01["평균"] == 0.83)
 check("T02(10:44:19~10:45:33) 안의 10:45:00(UTC 01:45) 자료 1개 연결", m[m["회차"] == "T02"]["시간창 안 자료 수"].iloc[0] == 1)
 t03 = m[m["회차"] == "T03"].iloc[0]
 check("자료 없는 회차(T03)는 '보간하지 않음' + 가장 가까운 값만 참고로", t03["시간창 안 자료 수"] == 0
       and "보간하지 않음" in t03["연결"] and t03["참고: 그 값"] == 0.79)
-m_bad = match_to_transects(tr3, sess, db.series_values(D, sid_s), "모름")
-check("시간 기준을 모르면 연결 안 함", m_bad["연결"].str.startswith("연결 안 함(시간 기준 불명").all())
-m_same = match_to_transects(tr3, sess, db.series_values(D, sid_s), "UTC+9 (한국시간)")
+m_bad = match_to_transects(tr3, sess, db.series_values(D, sid_s), "모름", target_session_id=sid3)
+check("시간 기준을 모르면 연결 안 함", (m_bad["시간창 안 자료 수"].fillna(0) == 0).all() and (m_bad["시각 변환 불가 수"].fillna(0) > 0).all())
+m_same = match_to_transects(tr3, sess, db.series_values(D, sid_s), "UTC+9 (한국시간)", target_session_id=sid3)
 check("기준을 UTC+9로 잘못 고르면 어긋남(자료 0개) → 기준 선택이 중요", (m_same["시간창 안 자료 수"].fillna(0) == 0).all())
-m_mg = match_to_transects(tr3, sess, db.series_values(D, sid_s), "UTC", margin_min=5)
+m_mg = match_to_transects(tr3, sess, db.series_values(D, sid_s), "UTC", margin_min=5, target_session_id=sid3)
 check("앞뒤 여유 5분이면 T03에도 자료 포함", m_mg[m_mg["회차"] == "T03"]["시간창 안 자료 수"].iloc[0] >= 1)
 
 print("--- 엑셀 내보내기 / CLI ---")

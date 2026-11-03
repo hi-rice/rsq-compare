@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import statistics
+from datetime import timezone
 
 import numpy as np
 import pandas as pd
@@ -140,22 +141,23 @@ def fig_reference(summ: pd.DataFrame) -> Figure:
 
 def fig_external(values: pd.DataFrame, matched: pd.DataFrame, name: str, unit: str, shift_note: str,
                  shift_hours: float) -> Figure:
-    """외부 시계열 + 회차 시간창(음영). 시각축은 DIS 기준."""
+    """외부 시계열 + 회차 시간창(음영). 시각축은 UTC 기준."""
     _ensure_font()
     fig = Figure(figsize=(10, 4.8), dpi=100, layout="constrained")
     ax = fig.add_subplot(111)
-    ok = matched[matched.get("시간창 시작(DIS 기준)").notna()] if "시간창 시작(DIS 기준)" in matched else pd.DataFrame()
+    ok = matched[matched.get("시간창 시작 UTC").notna()] if "시간창 시작 UTC" in matched else pd.DataFrame()
     if values.empty or ok.empty:
         ax.text(0.5, 0.5, "그릴 자료가 없습니다(연결된 회차 없음)", ha="center", va="center", transform=ax.transAxes)
         ax.set_axis_off()
         return fig
-    t = pd.to_datetime(values["t"]) + pd.to_timedelta(shift_hours, unit="h")
-    w0 = pd.to_datetime(ok["시간창 시작(DIS 기준)"]).min() - pd.Timedelta(minutes=30)
-    w1 = pd.to_datetime(ok["시간창 끝(DIS 기준)"]).max() + pd.Timedelta(minutes=30)
+    values = values.sort_values("t_utc").reset_index(drop=True)
+    t = pd.to_datetime(values["t_utc"], utc=True)
+    w0 = pd.to_datetime(ok["시간창 시작 UTC"]).min() - pd.Timedelta(minutes=30)
+    w1 = pd.to_datetime(ok["시간창 끝 UTC"]).max() + pd.Timedelta(minutes=30)
     sel = (t >= w0) & (t <= w1)
     ax.plot(t[sel], values["value"][sel], color="#2563a8", lw=1.2, marker="o", ms=3, label=name)
     # 같은 시간창(같은 세션을 다른 .dis로 등록한 경우 등)은 한 번만 그리고 등록ID를 모아 표시
-    grp = ok.groupby(["시간창 시작(DIS 기준)", "시간창 끝(DIS 기준)", "회차"], sort=True)["등록ID"].apply(
+    grp = ok.groupby(["시간창 시작 UTC", "시간창 끝 UTC", "회차"], sort=True)["등록ID"].apply(
         lambda x: ",".join(f"#{int(v)}" for v in sorted(set(x))))
     for i, ((a, b, lab), ids) in enumerate(grp.items()):
         a, b = pd.to_datetime(a), pd.to_datetime(b)
@@ -164,11 +166,11 @@ def fig_external(values: pd.DataFrame, matched: pd.DataFrame, name: str, unit: s
                 ha="center", va="bottom", fontsize=7, rotation=90)
     ax.set_xlim(w0, w1)
     ax.set_ylabel(f"{name} ({unit})" if unit else name)
-    ax.set_xlabel("시각 (DIS 시간 기준)")
+    ax.set_xlabel("시각 (UTC)")
     ax.set_title(f"외부 시계열과 회차 시간창 — {shift_note}", fontsize=10, pad=40)
     ax.legend(fontsize=8, loc="lower right")
     ax.grid(alpha=0.3)
     from matplotlib.dates import DateFormatter
-    ax.xaxis.set_major_formatter(DateFormatter("%m-%d %H:%M"))
+    ax.xaxis.set_major_formatter(DateFormatter("%m-%d %H:%M", tz=timezone.utc))
     fig.autofmt_xdate()
     return fig

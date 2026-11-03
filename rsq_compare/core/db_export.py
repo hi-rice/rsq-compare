@@ -12,7 +12,7 @@ from openpyxl.styles import Font
 from rsq_compare import APP_NAME, APP_VERSION
 from rsq_compare.core import db
 from rsq_compare.core.export import _unique_dir, write_df, write_lines
-from rsq_compare.core.external import match_to_transects, parse_offset_hours
+from rsq_compare.core.external import match_to_transects
 from rsq_compare.core.multi import (
     NOTE_MULTI,
     fig_external,
@@ -29,7 +29,10 @@ def external_tables(db_path: Path, sess: pd.DataFrame, tr: pd.DataFrame, margin_
     for _, s in db.series_df(db_path).iterrows():
         vals = db.series_values(db_path, int(s["id"]))
         m = match_to_transects(tr, sess, vals, s["time_basis"], margin_min, site_code=_nn(s.get("site_code")),
-                               kind=_nn(s.get("kind")), unit=_nn(s.get("unit")))
+                               kind=_nn(s.get("kind")), unit=_nn(s.get("unit")),
+                               target_session_id=_nn(s.get("target_session_id")),
+                               rain_type=_nn(s.get("rain_type")), rain_interval_min=_nn(s.get("rain_interval_min")),
+                               n_dropped=int(_nn(s.get("n_dropped")) or 0))
         out.append((s, m, vals))
     return out
 
@@ -54,10 +57,8 @@ def export_db(db_path: Path, ids: list[int], out_parent: Path, margin_min: float
     files.append(p)
     ext = external_tables(db_path, sess, tr, margin_min)
     for k, (s, m, vals) in enumerate(ext, start=1):
-        d_off = next((parse_offset_hours(b) for b in sess["time_basis"] if parse_offset_hours(b) is not None), None)
-        s_off = parse_offset_hours(s["time_basis"])
-        shift = (d_off - s_off) if (d_off is not None and s_off is not None) else 0
-        note = f"외부 기준 {s['time_basis']}" + (f", {shift:+g}시간 이동" if shift else ", 이동 없음")
+        shift = 0
+        note = "UTC 기준 · 원문 시간대 우선"
         p = png / f"{k + 2:02d}_외부_{_safe_name(s['name'])}.png"
         fig_external(vals, m, s["name"], s["unit"] or "", note, shift).savefig(p, dpi=150)
         files.append(p)
@@ -76,7 +77,7 @@ def export_db(db_path: Path, ids: list[int], out_parent: Path, margin_min: float
         ("수위", "RSQ에 입력된 수위(.dis Supplemental Data)가 있으면 그 값을, 없으면 직접 입력값을 사용. 출처 표시"),
         ("소하천 정보", "사용자가 불러온 소하천 목록에서 필요한 열만 사용(서비스 Key·IP·연락처 등은 저장·출력하지 않음)"),
         ("외부 시계열", f"회차 시간창(DIS 시작~시작+소요시간, 앞뒤 여유 {margin_min}분) 안의 값만 요약. 보간 없음. "
-                     "시간 기준이 다르면 두 기준이 모두 명시된 경우에만 시차만큼 이동"),
+                     "원문 시간대 우선, 시간대 없는 값에만 사용자 기준 적용. UTC로 비교"),
     ]
     write_lines(ws, lines)
     ws["A1"].font = Font(bold=True, size=13)
@@ -92,10 +93,17 @@ def export_db(db_path: Path, ids: list[int], out_parent: Path, margin_min: float
     for s, m, vals in ext:
         w = wb.create_sheet(f"외부_{_safe_name(s['name'])}"[:31])
         nr = write_lines(w, [("시계열 이름", s["name"]), ("자료 종류", s.get("kind")),
-                             ("소하천코드", s.get("site_code") or "미지정(시간만으로 연결)"),
-                             ("단위", s["unit"]), ("시간 기준(사용자 지정)", s["time_basis"]),
+                             ("소하천코드", s.get("site_code") or "미지정(연결 대상 확인 필요)"),
+                             ("연결할 측정ID", _nn(s.get("target_session_id"))),
+                             ("강우 종류", _nn(s.get("rain_type")) or "미확인"),
+                             ("강우 기록 간격(분)", _nn(s.get("rain_interval_min"))),
+                             ("단위", s["unit"]), ("시간대 없는 값의 기준", s["time_basis"]),
                              ("원본 파일", s["source_file"]), ("값 개수 / 시각 못 읽어 뺀 행", f"{s['n_values']} / {s['n_dropped']}")])
         write_df(w, m if not m.empty else pd.DataFrame({"안내": ["연결할 회차 없음"]}), nr + 1)
+        audit = vals.copy()
+        audit["t_utc"] = audit["t_utc"].map(lambda t: None if pd.isna(t) else t.isoformat())
+        w = wb.create_sheet(f"시각원문_{int(s['id'])}")
+        write_df(w, audit, 1)
     xlsx = out / "누적비교.xlsx"
     wb.save(xlsx)
     return {"folder": out, "files": [xlsx] + files}

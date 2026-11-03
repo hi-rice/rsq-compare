@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
@@ -25,7 +26,7 @@ from rsq_compare.core.parsers import to_number
 from rsq_compare.core.sites import CODE_RE, gps_from_sum
 from rsq_compare.core.tables import q_unit, time_basis
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -112,7 +113,9 @@ MIGRATE_COLUMNS = {
                  ("operator", "TEXT"), ("gps_lat", "REAL"), ("gps_lon", "REAL"), ("gps_n", "INTEGER")],
     "transects": [("gh_start", "REAL"), ("gh_start_time", "TEXT"), ("gh_end", "REAL"), ("gh_end_time", "TEXT"),
                   ("gh_unit", "TEXT"), ("gh_manual", "REAL"), ("gh_manual_time", "TEXT"), ("gh_manual_note", "TEXT")],
-    "ext_series": [("site_code", "TEXT"), ("kind", "TEXT")],
+    "ext_series": [("site_code", "TEXT"), ("kind", "TEXT"), ("target_session_id", "INTEGER"),
+                   ("rain_type", "TEXT"), ("rain_interval_min", "REAL")],
+    "ext_values": [("t_raw", "TEXT"), ("t_utc", "TEXT"), ("time_applied", "TEXT")],
 }
 
 
@@ -222,19 +225,49 @@ def set_reference(db_path: Path, sid: int, ref_q: float | None, unit: str = "", 
 # ---------------------------------------------------------------- 외부 시계열
 def add_series(db_path: Path, name: str, unit: str, time_basis_: str, times: list[str], values: list,
                source_file: Path | None, n_dropped: int, memo: str = "", site_code: str | None = None,
-               kind: str | None = None) -> int:
+               kind: str | None = None, target_session_id: int | None = None,
+               rain_type: str | None = None, rain_interval_min: float | None = None) -> int:
+    from rsq_compare.core.external import normalize_time, RAIN_TYPES
+    if len(times) != len(values):
+        raise ValueError("시각과 값 개수가 다릅니다.")
+    if rain_type is not None and rain_type not in RAIN_TYPES:
+        raise ValueError("강우 종류를 확인하세요.")
+    if rain_interval_min is not None and (not math.isfinite(float(rain_interval_min)) or float(rain_interval_min) <= 0):
+        raise ValueError("기록 간격은 0보다 커야 합니다.")
     init_db(db_path)
     with connect(db_path) as con:
+        if target_session_id is not None and not con.execute("SELECT 1 FROM sessions WHERE id=?", (int(target_session_id),)).fetchone():
+            raise ValueError("연결할 측정이 없습니다.")
+        if site_code and target_session_id is not None:
+            raise ValueError("지점 또는 측정 중 하나만 지정하세요.")
         cur = con.execute(
             """INSERT INTO ext_series(name, unit, time_basis, source_file, source_sha256, n_values, n_dropped,
-               imported_at, memo, site_code, kind) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+               imported_at, memo, site_code, kind, target_session_id, rain_type, rain_interval_min) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (name, unit or None, time_basis_, str(source_file) if source_file else None,
              sha256_file(source_file) if source_file else None, len(times), n_dropped, _now(), memo or None,
-             site_code or None, kind or None))
+             site_code or None, kind or None, target_session_id, rain_type, rain_interval_min))
         sid = cur.lastrowid
-        con.executemany("INSERT INTO ext_values(series_id, t, value) VALUES(?,?,?)",
-                        [(sid, t, None if v is None or pd.isna(v) else float(v)) for t, v in zip(times, values)])
+        rows = []
+        for t, v in zip(times, values):
+            utc, applied = normalize_time(t, time_basis_)
+            raw = str(t)
+            rows.append((sid, raw, None if v is None or pd.isna(v) else float(v), raw,
+                         None if pd.isna(utc) else utc.isoformat(), applied))
+        con.executemany("INSERT INTO ext_values(series_id,t,value,t_raw,t_utc,time_applied) VALUES(?,?,?,?,?,?)", rows)
     return sid
+
+
+def set_series_target(db_path: Path, series_id: int, site_code=None, target_session_id=None):
+    init_db(db_path)
+    if not site_code and target_session_id is None:
+        raise ValueError("연결할 지점이나 측정을 지정하세요.")
+    if site_code and target_session_id is not None:
+        raise ValueError("지점 또는 측정 중 하나만 지정하세요.")
+    with connect(db_path) as con:
+        if target_session_id is not None and not con.execute("SELECT 1 FROM sessions WHERE id=?", (int(target_session_id),)).fetchone():
+            raise ValueError("연결할 측정이 없습니다.")
+        con.execute("UPDATE ext_series SET site_code=?, target_session_id=? WHERE id=?",
+                    (site_code or None, target_session_id, int(series_id)))
 
 
 def delete_series(db_path: Path, series_id: int) -> None:
@@ -275,7 +308,15 @@ def series_df(db_path: Path) -> pd.DataFrame:
 
 
 def series_values(db_path: Path, series_id: int) -> pd.DataFrame:
-    return read_table(db_path, "SELECT t, value FROM ext_values WHERE series_id=? ORDER BY t", (int(series_id),))
+    from rsq_compare.core.external import normalized_values
+    init_db(db_path)
+    values = read_table(db_path, "SELECT t, value, t_raw, t_utc, time_applied FROM ext_values WHERE series_id=? ORDER BY rowid", (int(series_id),))
+    # 기존 DB의 t 원문을 유지한다. 예전에 버린 시간대는 복원할 수 없다.
+    values["시각 보존 안내"] = values["t_raw"].isna().map({True: "이전 저장값: 원문 시간대 유실 가능, 원본 재가져오기 권장", False: "원문 보존"})
+    values["t_raw"] = values["t_raw"].fillna(values["t"])
+    info = series_df(db_path)
+    row = info[info.id == series_id]
+    return normalized_values(values, row.iloc[0]["time_basis"]) if not row.empty else values
 
 
 def reg_checks_df(db_path: Path) -> pd.DataFrame:

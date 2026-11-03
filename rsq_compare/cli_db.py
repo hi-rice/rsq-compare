@@ -23,7 +23,7 @@ import pandas as pd
 from rsq_compare.core import db
 from rsq_compare.core.batch import import_folder
 from rsq_compare.core.db_export import export_db
-from rsq_compare.core.external import KIND_CHOICES, TIME_BASIS_CHOICES, read_timeseries
+from rsq_compare.core.external import KIND_CHOICES, RAIN_TYPES, TIME_BASIS_CHOICES, read_timeseries
 from rsq_compare.core.sites import read_catalog_file
 
 
@@ -49,7 +49,11 @@ def main(argv=None) -> int:
     p.add_argument("--time", help="시각 열 이름(생략 시 자동)")
     p.add_argument("--value", help="값 열 이름(생략 시 '값' 또는 두 번째 열)")
     p.add_argument("--kind", default="기타", help=f"자료 종류: {KIND_CHOICES}")
-    p.add_argument("--site", help="소하천코드(지정하면 같은 소하천 세션에만 연결)")
+    scope = p.add_mutually_exclusive_group(required=True)
+    scope.add_argument("--site", help="연결할 소하천코드")
+    scope.add_argument("--session-id", type=int, help="연결할 측정 등록ID")
+    p.add_argument("--rain-type", choices=RAIN_TYPES, default="미확인")
+    p.add_argument("--rain-interval", type=float, help="강우 기록 간격(분), 구간값은 끝 시각")
     p = sub.add_parser("list", help="등록된 세션 목록")
     p.add_argument("--db", required=True)
     p = sub.add_parser("export", help="비교 결과 엑셀·그래프 저장")
@@ -73,8 +77,9 @@ def main(argv=None) -> int:
         print(db.import_reference_file(dbp, Path(a.file)).to_string(index=False))
     elif a.cmd == "ext":
         vals, dropped, how = read_timeseries(Path(a.file), a.time, a.value)
-        sid = db.add_series(dbp, a.name, a.unit, a.basis, [t.strftime("%Y-%m-%d %H:%M:%S") for t in vals["t"]],
-                            list(vals["value"]), Path(a.file), dropped, site_code=a.site, kind=a.kind)
+        sid = db.add_series(dbp, a.name, a.unit, a.basis, list(vals["t_raw"]),
+                            list(vals["value"]), Path(a.file), dropped, site_code=a.site, kind=a.kind, target_session_id=a.session_id,
+                            rain_type=a.rain_type, rain_interval_min=a.rain_interval)
         print(f"시계열 #{sid} 저장: {len(vals)}개 값({how}), 시각을 못 읽어 뺀 행 {dropped}개")
     elif a.cmd == "list":
         db.init_db(dbp)
