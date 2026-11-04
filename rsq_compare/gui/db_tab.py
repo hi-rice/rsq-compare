@@ -15,10 +15,11 @@ import math
 from pathlib import Path
 
 import pandas as pd
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
+    QToolButton, QMenu, QDateEdit,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -61,7 +62,7 @@ from rsq_compare.gui.df_model import DataFrameModel
 
 EDIT_BG = QColor("#fffbe6")
 COLS = ["비교", "등록ID", "세션", "사용한 .dis", "측정일", "소하천코드 (입력)", "소하천명[목록]", "측정자 (입력)",
-        "DIS 회차 수", "회차 평균 Q", "비교 유량 (입력)", "메모·날씨 (입력)"]
+        "DIS 회차 수", "회차 평균 Q", "비교 유량 (입력)", "메모·날씨 (입력)","지점 상태"]
 C_CHECK, C_ID, C_CODE, C_RIVER, C_OP, C_REF, C_MEMO = 0, 1, 5, 6, 7, 10, 11
 EDITABLE = {C_CODE, C_OP, C_REF, C_MEMO}
 
@@ -252,11 +253,19 @@ class DbTab(QWidget):
         self.b_code_review.clicked.connect(self.review_code)
         self.b_del = QPushButton("등록 삭제")
         self.b_del.setProperty("danger",True)
-        for b in (self.b_import, self.b_cat, self.b_ref, self.b_ext, self.b_export, self.b_del, self.b_review, self.b_code_review):
-            r2.addWidget(b)
+        self.b_import.setText('1  측정 가져오기')
+        point=QPushButton('2  지점 지정');point.clicked.connect(self.choose_site)
+        compare=QPushButton('3  비교');compare.clicked.connect(lambda:self.tabs.setCurrentIndex(0))
+        self.b_export.setText('4  결과 저장');self.b_export.setProperty('primary',True)
+        for b in (self.b_import,point,compare,self.b_export):r2.addWidget(b)
+        menu=QMenu(self)
+        for button in (self.b_cat,self.b_ref,self.b_ext,self.b_review,self.b_code_review,self.b_del):
+            menu.addAction(button.text(),button.click);button.hide()
+        more=QToolButton();more.setText('자료·관리 ⋯');more.setMenu(menu);more.setPopupMode(QToolButton.InstantPopup);r2.addWidget(more)
         r2.addStretch(1)
         v.addLayout(r2)
-        note = QLabel(NOTE_MULTI + " 노란 칸은 더블클릭해서 입력합니다. 비교 유량은 차이만 보여주고 판정하지 않습니다.")
+        note = QLabel("노란 칸은 입력 · 체크는 비교 대상 · 관계 확인은 측정 품질 승인이 아닙니다.")
+        note.setToolTip(NOTE_MULTI)
         note.setWordWrap(True)
         note.setStyleSheet("color:#444; padding:2px;")
         v.addWidget(note)
@@ -265,10 +274,21 @@ class DbTab(QWidget):
         left = QWidget()
         lv = QVBoxLayout(left)
         lv.setContentsMargins(0, 0, 0, 0)
-        lv.addWidget(QLabel("<b>등록된 세션</b> — ☑ 비교에 포함 · 행을 클릭하면 '지점·수위' 탭에 자세히 표시"))
+        self.measure_count=QLabel();lv.addWidget(self.measure_count)
+        self.measure_search=QLineEdit();self.measure_search.setPlaceholderText('하천명·관리코드 검색')
+        lv.addWidget(self.measure_search)
+        self.unassigned=QCheckBox('지점 미지정만');lv.addWidget(self.unassigned)
+        datebar=QHBoxLayout();self.use_dates=QCheckBox('날짜 범위');datebar.addWidget(self.use_dates)
+        self.date_from=QDateEdit(QDate(2000,1,1));self.date_to=QDateEdit(QDate(2100,12,31))
+        for edit in (self.date_from,self.date_to):edit.setCalendarPopup(True);edit.setDisplayFormat('yyyy-MM-dd');datebar.addWidget(edit)
+        lv.addLayout(datebar)
+        self.measure_details=QCheckBox('파일·내부 정보 열 보기');lv.addWidget(self.measure_details)
         self.tbl = QTableWidget(0, len(COLS))
         self.tbl.setHorizontalHeaderLabels(COLS)
         self.tbl.verticalHeader().setVisible(False)
+        self.tbl.verticalHeader().setDefaultSectionSize(32)
+        for logical in (6,4,8,9,12):
+            self.tbl.horizontalHeader().moveSection(self.tbl.horizontalHeader().visualIndex(logical),[6,4,8,9,12].index(logical)+1)
         lv.addWidget(self.tbl, 1)
         hb = QHBoxLayout()
         b_all = QPushButton("전체 선택")
@@ -283,7 +303,8 @@ class DbTab(QWidget):
         self.m_summ = DataFrameModel()
         w = QSplitter(Qt.Vertical)
         w.addWidget(self.fig_s)
-        w.addWidget(make_table(self.m_summ))
+        self.summary_table=make_table(self.m_summ)
+        w.addWidget(self.summary_table)
         w.setSizes([430, 250])
         self.ph_s = Placeholder(w, "")
         self.ph_s.add_action("측정 가져오기",self.import_dir)
@@ -360,18 +381,34 @@ class DbTab(QWidget):
         self.ph_e = Placeholder(w, "")
         self.ph_e.add_action("외부 자료 추가",self.import_ext)
         self.tabs.addTab(self.ph_e, "외부 자료 연결")
-        self.m_tr = DataFrameModel()
-        self.tabs.addTab(make_table(self.m_tr), "회차 전체")
+        self.m_tr = DataFrameModel(check_column="선택",on_check=self.change_transect_check)
+        self.tr_table=make_table(self.m_tr)
+        self.tabs.addTab(self.tr_table, "회차 전체")
         self.m_versions = DataFrameModel()
         self.tabs.addTab(make_table(self.m_versions), "측정 이력")
         self.m_codes = DataFrameModel()
-        self.tabs.addTab(make_table(self.m_codes), "코드 확인")
+        catalog_page=QWidget();cl=QVBoxLayout(catalog_page)
+        self.code_count=QLabel();cl.addWidget(self.code_count)
+        self.code_search=QLineEdit();self.code_search.setPlaceholderText('하천명·관리코드 검색');cl.addWidget(self.code_search)
+        self.code_region=QComboBox();self.code_region.addItem('모든 지역');cl.addWidget(self.code_region)
+        self.code_table=make_table(self.m_codes);cl.addWidget(self.code_table,1)
+        use_code=QPushButton('선택한 목록 지점을 현재 측정에 지정');use_code.clicked.connect(self.assign_catalog_row);cl.addWidget(use_code)
+        self.tabs.addTab(catalog_page, "소하천 목록")
         self.m_rep = DataFrameModel()
-        self.tabs.addTab(make_table(self.m_rep), "가져오기 보고")
+        report=QWidget();rl=QVBoxLayout(report);self.report_summary=QLabel('아직 가져오기 보고가 없습니다.');self.report_summary.setWordWrap(True);rl.addWidget(self.report_summary)
+        next_site=QPushButton('현재 측정의 지점 지정');next_site.clicked.connect(self.choose_site);rl.addWidget(next_site)
+        rl.addWidget(make_table(self.m_rep),1);self.tabs.addTab(report, "가져오기 보고")
         sp.addWidget(self.tabs)
-        sp.setSizes([640, 860])
+        sp.setSizes([600, 760])
+        sp.setStretchFactor(0,1);sp.setStretchFactor(1,2)
         v.addWidget(sp, 1)
 
+        self.measure_search.textChanged.connect(self.filter_measurements)
+        self.unassigned.toggled.connect(self.filter_measurements)
+        self.use_dates.toggled.connect(self.filter_measurements)
+        self.date_from.dateChanged.connect(self.filter_measurements);self.date_to.dateChanged.connect(self.filter_measurements)
+        self.measure_details.toggled.connect(self.toggle_measure_details)
+        self.code_search.textChanged.connect(self.filter_codes);self.code_region.currentTextChanged.connect(self.filter_codes)
         b_db.clicked.connect(self.choose_db)
         self.b_import.clicked.connect(self.import_dir)
         self.b_cat.clicked.connect(self.import_catalog)
@@ -410,7 +447,8 @@ class DbTab(QWidget):
         self.lbl_db.setText(f"측정 {len(self.sess)}건 · 선택 가능한 소하천 {len(self.cat)}곳")
         self.lbl_db.setToolTip(str(self.db_path))
         tr_all = db.transects_df(self.db_path) if not self.sess.empty else pd.DataFrame()
-        summ = session_summary(self.sess, tr_all) if not self.sess.empty else pd.DataFrame()
+        chosen_tr=tr_all[tr_all.compare_selected.fillna(1)==1] if not tr_all.empty else tr_all
+        summ = session_summary(self.sess, chosen_tr) if not self.sess.empty else pd.DataFrame()
         mcol = next((c for c in summ.columns if c.startswith("회차 Total Q 산술평균")), None)
         self.tbl.blockSignals(True)
         self.tbl.setRowCount(len(self.sess))
@@ -424,13 +462,15 @@ class DbTab(QWidget):
             river = _nn(s.get("river_name"))
             code = _nn(s.get("site_code"))
             name = s["session_name"] + (" [확인 필요]" if s.get("review_status")=="pending" else f" [재처리 · 이전 #{int(s.previous_id)}]" if pd.notna(s.get("previous_id")) else "")
-            vals = [str(s["id"]), name, s["dis_file"], s["date_measured"] or "",
+            selected_count=int(((tr_all.session_id==s.id)&(tr_all.compare_selected==1)&(tr_all.has_summary==1)).sum())
+            vals = [str(s["id"]), name, s["dis_file"], s["first_start_time"] or s["date_measured"] or "",
                     code or "", river or ("목록에 없음" if code and not self.cat.empty else ""),
-                    _nn(s.get("operator")) or "", str(s["n_transects_dis"]),
+                    _nn(s.get("operator")) or "", str(selected_count),
                     "" if mean is None or pd.isna(mean) else f"{mean:.4f}",
-                    "" if _nn(s.get("ref_q")) is None else f"{s['ref_q']:g}", _nn(s.get("memo")) or ""]
+                    "" if _nn(s.get("ref_q")) is None else f"{s['ref_q']:g}", _nn(s.get("memo")) or "", "코드 충돌" if s.get("catalog_conflict") else "지정됨" if river or code else "미지정"]
             for j, val in enumerate(vals, start=1):
                 it = QTableWidgetItem(str(val))
+                it.setToolTip(str(val))
                 if j in EDITABLE:
                     it.setBackground(EDIT_BG)
                     it.setToolTip("더블클릭해서 입력")
@@ -441,11 +481,16 @@ class DbTab(QWidget):
                 self.tbl.setItem(i, j, it)
         self.tbl.resizeColumnsToContents()
         self.tbl.blockSignals(False)
-        self.m_codes.set_df(catalog_review(self.db_path).rename(columns=KOR_LABEL))
-        version_cols = {'id':'등록ID','measurement_id':'측정 묶음','previous_id':'이전 등록ID','session_name':'세션',
+        self.catalog_rows=catalog_review(self.db_path)
+        keep_region=self.code_region.currentText();self.code_region.blockSignals(True);self.code_region.clear();self.code_region.addItem('모든 지역')
+        if not self.catalog_rows.empty:self.code_region.addItems(sorted({str(v) for v in self.catalog_rows.sigungu.dropna() if v}))
+        self.code_region.setCurrentText(keep_region);self.code_region.blockSignals(False);self.filter_codes()
+        version_cols = {'registered_at':'등록 시각','id':'등록ID','measurement_id':'측정 묶음','previous_id':'이전 등록ID','session_name':'세션',
                         'dis_file':'사용 DIS','review_status':'확인 상태','review_note':'안내','folder':'원본 폴더'}
         versions = self.sess.reindex(columns=version_cols).rename(columns=version_cols)
-        versions['확인 상태'] = versions['확인 상태'].replace({'confirmed':'확인됨','pending':'확인 필요'})
+        latest=self.sess.groupby('measurement_id').id.transform('max') if not self.sess.empty else pd.Series(dtype=int)
+        versions['확인 상태']=['관계 확인 필요' if r.review_status=='pending' else '이전 버전' if r.id!=last else '재처리본 (관계 확인)' if pd.notna(r.previous_id) else '최초 등록' for (_,r),last in zip(self.sess.iterrows(),latest)]
+        versions['설명']='측정 관계 표시이며 품질 승인이 아님'
         self.m_versions.set_df(versions)
         self.cmb_series.blockSignals(True)
         self.cmb_series.clear()
@@ -456,18 +501,21 @@ class DbTab(QWidget):
         self.cmb_series.blockSignals(False)
         if len(self.sess):
             self.tbl.setCurrentCell(min(keep_row, len(self.sess) - 1), 2)
-        self.refresh_views()
+        self.toggle_measure_details()
+        self.filter_measurements()
 
     def checked_ids(self) -> list[int]:
         return [int(self.tbl.item(i, C_ID).text()) for i in range(self.tbl.rowCount())
-                if self.tbl.item(i, C_CHECK).checkState() == Qt.Checked]
+                if not self.tbl.isRowHidden(i) and self.tbl.item(i, C_CHECK).checkState() == Qt.Checked]
 
     def _check_all(self, on):
         self.tbl.blockSignals(True)
         for i in range(self.tbl.rowCount()):
+            if self.tbl.isRowHidden(i):continue
             self.tbl.item(i, C_CHECK).setCheckState(Qt.Checked if on else Qt.Unchecked)
         self.tbl.blockSignals(False)
         for i in range(self.tbl.rowCount()):
+            if self.tbl.isRowHidden(i):continue
             db.set_comparison_selected(self.db_path,int(self.tbl.item(i,C_ID).text()),on)
         self.refresh_views()
 
@@ -534,14 +582,26 @@ class DbTab(QWidget):
             return
         summ = session_summary(sess, tr)
         self.fig_s.set_figure(fig_sessions(sess, tr))
-        self.m_summ.set_df(summ)
+        mean_col=next((c for c in summ if c.startswith('회차 Total Q 산술평균')),None)
+        first=['소하천명[목록]','첫 회차 시작(DIS 원문)','DIS 회차 수']+([mean_col] if mean_col else [])
+        order=first+[c for c in summ if c not in first]
+        self.m_summ.set_df(summ[order].rename(columns={'소하천명[목록]':'지점','첫 회차 시작(DIS 원문)':'측정일시','DIS 회차 수':'선택 회차 수'}))
+        for i in range(4,len(order)):self.summary_table.setColumnHidden(i,not self.measure_details.isChecked())
         self.ph_s.show_content()
         self.fig_r.set_figure(fig_reference(summ))
         from rsq_compare.core.workflow import reference_results
         comparison=reference_results(self.db_path,sess,tr)
         self.m_ref.set_df(comparison)
         self.ph_ref.show_empty('비교값이 없습니다. 출처와 적용 범위를 지정해 입력하세요.') if comparison.empty else self.ph_ref.show_content()
-        self.m_tr.set_df(_tr_view(tr))
+        all_tr=db.transects_df(self.db_path,list(sess.id))
+        rows=[]
+        for _,r in all_tr.iterrows():
+            point=sess.set_index('id').loc[r.session_id].get('river_name') or '미지정'
+            rows.append({'선택':bool(r.compare_selected),'지점':point,'측정일시':r.start_time_raw,'회차':r.label,
+                         '유량 [DIS]':r.total_q,'상태':'요약 없음 (0 아님)' if not r.has_summary else '사용자 미선택' if not r.compare_selected else '선택',
+                         'DIS 요약':'있음' if r.has_summary else '없음','등록ID':r.session_id,'회차번호':r.num})
+        self.m_tr.set_df(pd.DataFrame(rows))
+        for c in (7,8):self.tr_table.setColumnHidden(c,True)
         self.refresh_ext()
 
     def _current_sid(self, row=None):
@@ -689,6 +749,54 @@ class DbTab(QWidget):
             self.refresh_ext()
 
     # ------------------------------------------------------------ 작업
+    def change_transect_check(self,row,checked):
+        r=self.m_tr._df.iloc[row]
+        with db.connect(self.db_path) as con:
+            con.execute('UPDATE transects SET compare_selected=?,selection_explicit=1 WHERE session_id=? AND num=?',(int(checked),int(r['등록ID']),int(r['회차번호'])))
+        self.reload()
+
+    def toggle_measure_details(self,*_):
+        for c in range(self.tbl.columnCount()):self.tbl.setColumnHidden(c,not self.measure_details.isChecked() and c not in (0,4,6,8,9,12))
+        self.tbl.horizontalHeaderItem(6).setText('지점')
+        self.tbl.horizontalHeaderItem(4).setText('측정일시');self.tbl.horizontalHeaderItem(8).setText('선택 회차');self.tbl.horizontalHeaderItem(9).setText('선택 평균 Q')
+
+    def filter_measurements(self,*_):
+        q=self.measure_search.text().strip();visible=0
+        for i,(_,r) in enumerate(self.sess.iterrows()):
+            point=str(_nn(r.get('river_name')) or '')+' '+str(_nn(r.get('site_code')) or '')
+            show=not q or q in point
+            if self.unassigned.isChecked():show=show and not _nn(r.get('river_name')) and not _nn(r.get('site_code'))
+            if self.use_dates.isChecked():
+                day=str(r.get('date_measured') or '')[:10]
+                show=show and self.date_from.date().toString('yyyy-MM-dd')<=day<=self.date_to.date().toString('yyyy-MM-dd')
+            self.tbl.setRowHidden(i,not show);visible+=int(show)
+        self.measure_count.setText(f'측정 전체 {len(self.sess)}건 · 검색 결과 {visible}건')
+        current=self.tbl.currentRow()
+        if current<0 or self.tbl.isRowHidden(current):
+            first=next((i for i in range(self.tbl.rowCount()) if not self.tbl.isRowHidden(i)),-1)
+            self.tbl.setCurrentCell(first,6)
+        self.refresh_views()
+
+    def filter_codes(self,*_):
+        c=getattr(self,'catalog_rows',pd.DataFrame())
+        if c.empty:self.m_codes.set_df(c);self.code_count.setText('소하천 목록이 없습니다. 자료·관리에서 목록을 가져오세요.');return
+        total=c.site_code.nunique();q=self.code_search.text().strip()
+        if q:c=c[c.site_code.str.contains(q,regex=False,na=False)|c.river_name.str.contains(q,regex=False,na=False)]
+        if self.code_region.currentIndex()>0:c=c[c.sigungu==self.code_region.currentText()]
+        display=c.rename(columns=KOR_LABEL).copy();display['선택한 행']=display['선택한 행'].map({True:'사용자가 확인한 행',False:'—'})
+        self.m_codes.set_df(display);self.code_count.setText(f'전체 {total}곳 · 원본 {len(self.catalog_rows)}행 · 검색 결과 {c.site_code.nunique()}곳 / {len(c)}행')
+
+    def assign_catalog_row(self):
+        index=self.code_table.currentIndex()
+        sid=self._current_sid()
+        if sid is None or not index.isValid():QMessageBox.information(self,'지점 지정','측정과 소하천 목록 행을 선택하세요.');return
+        code=self.m_codes._df.iloc[index.row()]['소하천코드']
+        try:
+            from rsq_compare.core.workflow import assign_site
+            assign_site(self.db_path,sid,code=str(code))
+        except ValueError as e:QMessageBox.warning(self,'지점 확인',str(e));return
+        self.reload();self.main.statusBar().showMessage('지점 저장 완료',5000)
+
     def choose_site(self):
         sid=self._current_sid()
         if sid is None:
@@ -754,7 +862,10 @@ class DbTab(QWidget):
 
     def _on_imported(self, rep: pd.DataFrame):
         self.main._set_busy(False, "가져오기 완료")
-        self.m_rep.set_df(rep)
+        front=[c for c in ['결과','회차 수(상세)','DIS에 있는 회차 수','요약 없는 회차','안내','다음 작업'] if c in rep]
+        self.m_rep.set_df(rep[front+[c for c in rep if c not in front]])
+        counts=rep['결과'].value_counts()
+        self.report_summary.setText(f"새 등록 {counts.get('새로 등록',0)}건 · 중복 건너뜀 {counts.get('이미 등록됨(건너뜀)',0)}건 · 재처리 {counts.get('재처리본 등록',0)}건 · 확인 필요 {counts.get('측정 관계 확인 필요',0)}건 · 실패 {counts.get('오류',0)}건")
         self.reload()
         self.tabs.setCurrentIndex(self.tabs.count()-1)
         n_new = int((rep["결과"] == "새로 등록").sum()) if "결과" in rep else 0

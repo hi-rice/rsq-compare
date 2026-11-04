@@ -51,4 +51,35 @@ class WorkflowTests(unittest.TestCase):
         d.table.setCurrentCell(0,0);d.accept()
         self.assertEqual(db.sessions_df(self.path).iloc[0].site_code,'00000000220')
 
+
+class AccumulatedUiTests(unittest.TestCase):
+    setUp=WorkflowTests.setUp
+    tearDown=WorkflowTests.tearDown
+    def test_distinct_synthetic_measurements_filters_and_checkbox_persistence(self):
+        import os;os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
+        from PySide6.QtWidgets import QApplication
+        from PySide6.QtCore import QSettings,Qt,QDate
+        from rsq_compare.gui.main_window import MainWindow
+        from rsq_compare.gui.workers import JobRunner
+        app=QApplication.instance() or QApplication([])
+        settings=QSettings('NDMI','RSQCompare');previous=settings.value('db_path');settings.setValue('db_path',str(self.path))
+        with db.connect(self.path) as c:
+            c.execute("UPDATE sessions SET date_measured='2026-01-01',first_start_time='2026-01-01 09:00:00' WHERE id=1")
+            c.execute("INSERT INTO sessions(id,session_name,dis_sha256,q_unit,time_basis,date_measured,first_start_time) VALUES(2,'별개 가상 측정','other-hash','m3/s','UTC+9','2026-01-02','2026-01-02 09:00:00')")
+            c.execute("INSERT INTO transects(session_id,num,label,has_summary,total_q,start_time_raw,duration_s) VALUES(2,1,'T01',1,7,'2026-01-02 09:00:00',120)")
+        workflow.assign_site(self.path,1,local_name='합성 시험지점A')
+        w=MainWindow(JobRunner())
+        try:
+            self.assertEqual(len(w.dbtab._selected()[0]),2)
+            w.dbtab.measure_search.setText('합성 시험지점A');self.assertEqual(len(w.dbtab.checked_ids()),1)
+            w.dbtab.measure_search.clear();w.dbtab.unassigned.setChecked(True)
+            self.assertEqual(w.dbtab.checked_ids(),[2]);w.dbtab.unassigned.setChecked(False)
+            w.dbtab.date_from.setDate(QDate(2026,1,1));w.dbtab.date_to.setDate(QDate(2026,1,1));w.dbtab.use_dates.setChecked(True)
+            self.assertEqual(w.dbtab.checked_ids(),[1])
+            model=w.dbtab.m_tr;model.setData(model.index(0,0),Qt.Unchecked,Qt.CheckStateRole)
+            self.assertEqual(db.transects_df(self.path,[1]).iloc[0].compare_selected,0)
+            w.dbtab.reload();self.assertEqual(w.dbtab.m_tr._df.iloc[0]['상태'],'사용자 미선택')
+        finally:
+            w.close();settings.setValue('db_path',previous)
+
 if __name__=='__main__':unittest.main()

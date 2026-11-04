@@ -84,7 +84,10 @@ def _fit_columns(tv: QTableView, max_w: int = 340):
 
 
 def note_label(text: str = "") -> QLabel:
+    full=text
+    if len(text)>150:text=text[:100]+"… (설명에 마우스를 올리세요)"
     lb = QLabel(text)
+    lb.setToolTip(full)
     lb.setWordWrap(True)
     lb.setTextInteractionFlags(Qt.TextSelectableByMouse)
     lb.setStyleSheet("color:#444; padding:4px 2px;")
@@ -205,6 +208,8 @@ class MainWindow(QMainWindow):
         top2.addWidget(self.btn_dis)
         top2.addWidget(self.lbl_dis, 1)
         root.addLayout(top2)
+        self.lbl_point=QLabel("지점 미지정 · 지점 지정 버튼에서 선택하세요.")
+        root.addWidget(self.lbl_point)
 
         split = QSplitter(Qt.Horizontal)
         # 왼쪽: 회차 목록
@@ -467,6 +472,7 @@ class MainWindow(QMainWindow):
         self._fill_list()
         self._set_busy(False, f"불러오기 완료: {sd.files.name} (회차 {len(sd.records)}개)")
         self._refresh_all()
+        self.refresh_point()
 
     # ------------------------------------------------------------ 목록
     def assign_current_site(self):
@@ -478,7 +484,17 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self,'지점 지정',msg);return
         from rsq_compare.gui.input_dialogs import SiteDialog
         if SiteDialog(self,self.dbtab.db_path,sid).exec():
-            self.dbtab.reload();self.statusBar().showMessage('지점 저장 완료',5000)
+            self.dbtab.reload();self.refresh_point();self.statusBar().showMessage('지점 저장 완료',5000)
+
+    def refresh_point(self):
+        if self.sd is None:return
+        from rsq_compare.core.identity import fingerprint
+        from rsq_compare.core import db
+        rows=db.sessions_df(self.dbtab.db_path)
+        rows=rows[rows.content_hash==fingerprint(self.sd)['content']]
+        if rows.empty:self.lbl_point.setText('지점 미지정 · 지점 지정 버튼에서 선택하세요.');return
+        r=rows.iloc[0]
+        self.lbl_point.setText(f"지점: {r.river_name or '미지정'} · {r.site_code or '시험 지점' if r.local_site_id else r.site_code or '코드 없음'} · {r.sigungu or ''}")
 
     def _selection_key(self):
         import hashlib

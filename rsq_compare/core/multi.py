@@ -20,7 +20,7 @@ NOTE_MULTI = ("세션별 통계는 각 세션에 등록된 .dis의 회차별 Tot
 
 
 def session_label(row) -> str:
-    return f"#{row['id']} {row['session_name']}\n({row['dis_file']})"
+    return f"{row.get('river_name') or '지점 미지정'}\n{row.get('first_start_time') or row.get('date_measured') or '시각 없음'}"
 
 
 def session_summary(sess: pd.DataFrame, tr: pd.DataFrame) -> pd.DataFrame:
@@ -103,7 +103,7 @@ def fig_sessions(sess: pd.DataFrame, tr: pd.DataFrame) -> Figure:
     ax.set_xticks(x, labels, fontsize=8)
     ax.set_ylabel(f"RSQ 총유량 ({u})" if u else "RSQ 총유량")
     ax.set_xlabel("등록된 세션 (첫 회차 시작 시각 순)")
-    ax.set_title("세션별 회차 총유량 비교 — DIS에 기록된 RSQ 결과", fontsize=11)
+    ax.set_title(f"측정 {len(sess)}건의 회차 분포 · 측정별로 따로 비교", fontsize=11)
     ax.grid(axis="y", alpha=0.3)
     ax.spines[["top", "right"]].set_visible(False)
     ax.legend(fontsize=8, loc="best")

@@ -36,6 +36,8 @@ def import_folder(root: Path, db_path: Path, progress: Callable[[str], None] | N
                 "세션": sf.name, "폴더": str(sf.folder), "사용한 .dis": sd.dis_path.name if sd.dis_path else None,
                 "결과": RESULT_KOR[status], "등록ID": sid, "회차 수(상세)": len(sd.records),
                 "DIS에 있는 회차 수": sum(1 for r in sd.records if r.has_summary),
+                "요약 없는 회차": ", ".join(r.label for r in sd.records if not r.has_summary) or "없음",
+                "다음 작업": "측정 관계 확인" if status=="review" else "지점 지정 후 회차 확인",
                 "주의·오류 점검 수": n_warn,
                 "다른 .dis 후보": ", ".join(others) or None, "안내": msg,
             })

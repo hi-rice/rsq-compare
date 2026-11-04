@@ -17,10 +17,12 @@ LEVEL_COLORS = {"오류": QColor("#fde2e1"), "주의": QColor("#fff4d6")}
 
 
 class DataFrameModel(QAbstractTableModel):
-    def __init__(self, df: pd.DataFrame | None = None, highlight_col: str | None = None, parent=None):
+    def __init__(self, df: pd.DataFrame | None = None, highlight_col: str | None = None, parent=None, check_column=None, on_check=None):
         super().__init__(parent)
         self._df = df if df is not None else pd.DataFrame()
         self._hl = highlight_col
+        self._check_column = check_column
+        self._on_check = on_check
 
     def set_df(self, df: pd.DataFrame | None, highlight_col: str | None = None):
         self.beginResetModel()
@@ -47,7 +49,10 @@ class DataFrameModel(QAbstractTableModel):
         if not index.isValid():
             return None
         v = self._df.iat[index.row(), index.column()]
+        if role == Qt.CheckStateRole and self._df.columns[index.column()]==self._check_column:
+            return Qt.Checked if bool(v) else Qt.Unchecked
         if role == Qt.DisplayRole:
+            if self._df.columns[index.column()]==self._check_column:return ''
             if self._is_missing(v):
                 return ""
             if isinstance(v, float):
@@ -69,6 +74,20 @@ class DataFrameModel(QAbstractTableModel):
                 c = LEVEL_COLORS["주의"]
             return QBrush(c) if c else None
         return None
+
+    def flags(self,index):
+        flags=super().flags(index)
+        if index.isValid() and self._df.columns[index.column()]==self._check_column:flags |= Qt.ItemIsUserCheckable
+        return flags
+
+    def setData(self,index,value,role=Qt.EditRole):
+        if role==Qt.CheckStateRole and self._df.columns[index.column()]==self._check_column:
+            checked=value==Qt.Checked or value==Qt.Checked.value
+            self._df.iat[index.row(),index.column()]=checked
+            self.dataChanged.emit(index,index,[Qt.CheckStateRole])
+            if self._on_check:self._on_check(index.row(),checked)
+            return True
+        return False
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
         if role != Qt.DisplayRole:
