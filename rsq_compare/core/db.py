@@ -119,6 +119,7 @@ MIGRATE_COLUMNS = {
                   ("gh_unit", "TEXT"), ("gh_manual", "REAL"), ("gh_manual_time", "TEXT"), ("gh_manual_note", "TEXT"), ("gh_manual_unit", "TEXT DEFAULT 'm'"), ("gh_datum", "TEXT DEFAULT '미확인'"), ("gh_source", "TEXT"), ("compare_selected", "INTEGER DEFAULT 1"), ("selection_explicit", "INTEGER DEFAULT 0")],
     "ext_series": [("site_code", "TEXT"), ("kind", "TEXT"), ("target_session_id", "INTEGER"),
                    ("rain_type", "TEXT"), ("rain_interval_min", "REAL")],
+    "reference_q": [("site_key", "TEXT")],
     "ext_values": [("t_raw", "TEXT"), ("t_utc", "TEXT"), ("time_applied", "TEXT")],
 }
 
@@ -358,6 +359,9 @@ def set_reference(db_path: Path, sid: int, ref_q: float | None, unit: str = "", 
                            ON CONFLICT(session_id) DO UPDATE SET ref_q=excluded.ref_q, unit=excluded.unit,
                            source=excluded.source, memo=excluded.memo, updated_at=excluded.updated_at""",
                         (int(sid), float(ref_q), unit or None, source or None, memo or None, _now()))
+            from rsq_compare.core.workflow import site_key
+            row=sessions_df(db_path).set_index('id').loc[sid]
+            con.execute('UPDATE reference_q SET site_key=? WHERE session_id=?',(site_key(row),sid))
 
 
 # ---------------------------------------------------------------- 외부 시계열
@@ -422,7 +426,7 @@ def read_table(db_path: Path, sql: str, params=()) -> pd.DataFrame:
 def sessions_df(db_path: Path) -> pd.DataFrame:
     return read_table(db_path, """
         SELECT s.*, EXISTS(SELECT 1 FROM catalog_entries ce WHERE ce.site_code=s.site_code
-          AND NOT EXISTS(SELECT 1 FROM site_catalog sc WHERE sc.site_code=ce.site_code)) AS catalog_conflict, r.ref_q, r.unit AS ref_unit, r.source AS ref_source, r.memo AS ref_memo,
+          AND NOT EXISTS(SELECT 1 FROM site_catalog sc WHERE sc.site_code=ce.site_code)) AS catalog_conflict, r.ref_q, r.unit AS ref_unit, r.source AS ref_source, r.memo AS ref_memo, r.site_key AS ref_site_key,
                COALESCE(c.river_name,l.name) AS river_name, c.sido, COALESCE(c.sigungu,l.region) AS sigungu, c.sensor_type, c.interval_min,
                c.aws_id, c.aws_name, c.aws_dist_km, c.obs_lat, c.obs_lon
         FROM sessions s LEFT JOIN reference_q r ON r.session_id = s.id

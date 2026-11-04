@@ -48,6 +48,25 @@ def main():
                     tabs.setCurrentIndex(tab)
                     for _ in range(8):app.processEvents();time.sleep(.015)
                     assert w.grab().save(str(output/f'{width}_{main_tab}_{tab}.png'))
+                    if main_tab==0 and tab==2:
+                        for inner in (1,2):
+                            w.detail_tabs.setCurrentIndex(inner)
+                            for _ in range(8):app.processEvents();time.sleep(.015)
+                            assert w.grab().save(str(output/f'{width}_detail_{inner}.png'))
+                        w.detail_tabs.setCurrentIndex(0)
+        from rsq_compare.core.export import export_all
+        from rsq_compare.core.db_export import export_db
+        from openpyxl import load_workbook
+        context=db.sessions_df(path).iloc[0].to_dict()
+        exported=export_all(sd,selected,output/'exports',include_vel_plot=False,context=context)
+        book=load_workbook(exported['files'][0]);summary=book.active
+        assert book.sheetnames[0]=='결과 요약' and len(summary._charts)==1
+        assert abs(summary['B11'].value-st.mean)<1e-12 and summary['A11'].value==7
+        assert summary['C21'].value is None and '요약 없음' in summary['D21'].value
+        assert str(source) not in str(list(summary.values))
+        accumulated=export_db(path,[sid],output/'exports')
+        assert load_workbook(accumulated['files'][0]).sheetnames[0]=='결과 요약'
+        print('PASS 실제 측정 Excel 요약/내장 차트/선택 7회 통계/T07 빈값/지점/공유 요약 경로 비노출')
         w.close();app.processEvents()
         w2=MainWindow(JobRunner());w2._on_loaded(sd)
         assert w2.selected_nums()==selected

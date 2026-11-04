@@ -55,7 +55,7 @@ from rsq_compare.core.external import (
     read_raw_table,
     normalized_values,
 )
-from rsq_compare.core.multi import NOTE_MULTI, fig_external, fig_reference, fig_sessions, reference_by_transect, session_summary
+from rsq_compare.core.multi import NOTE_MULTI, fig_comparisons, fig_external, fig_reference, fig_sessions, reference_by_transect, session_summary
 from rsq_compare.core.parsers import to_number
 from rsq_compare.core.sites import CODE_RE, nearest_sites, read_catalog_file, site_text, KOR_LABEL
 from rsq_compare.gui.df_model import DataFrameModel
@@ -503,6 +503,7 @@ class DbTab(QWidget):
             self.tbl.setCurrentCell(min(keep_row, len(self.sess) - 1), 2)
         self.toggle_measure_details()
         self.filter_measurements()
+        if hasattr(self.main,'dbtab') and self.main.sd is not None:self.main.refresh_point()
 
     def checked_ids(self) -> list[int]:
         return [int(self.tbl.item(i, C_ID).text()) for i in range(self.tbl.rowCount())
@@ -592,6 +593,7 @@ class DbTab(QWidget):
         from rsq_compare.core.workflow import reference_results
         comparison=reference_results(self.db_path,sess,tr)
         self.m_ref.set_df(comparison)
+        self.fig_r.set_figure(fig_comparisons(comparison))
         self.ph_ref.show_empty('비교값이 없습니다. 출처와 적용 범위를 지정해 입력하세요.') if comparison.empty else self.ph_ref.show_content()
         all_tr=db.transects_df(self.db_path,list(sess.id))
         rows=[]

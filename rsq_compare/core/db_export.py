@@ -17,6 +17,7 @@ from rsq_compare.core.external import match_to_transects
 from rsq_compare.core.multi import (
     NOTE_MULTI,
     fig_external,
+    fig_comparisons,
     fig_reference,
     fig_sessions,
     reference_by_transect,
@@ -57,9 +58,12 @@ def export_db(db_path: Path, ids: list[int], out_parent: Path, margin_min: float
     p = png / "01_세션별_총유량.png"
     fig_sessions(sess, tr).savefig(p, dpi=150)
     files.append(p)
-    p = png / "02_비교유량_비교.png"
-    fig_reference(summ).savefig(p, dpi=150)
-    files.append(p)
+    from rsq_compare.core.workflow import reference_results
+    comparison=reference_results(db_path,sess,tr)
+    if not comparison.empty:
+        p = png / "02_비교유량_비교.png"
+        fig_comparisons(comparison).savefig(p,dpi=150)
+        files.append(p)
     ext = external_tables(db_path, sess, tr, margin_min)
     for k, (s, m, vals) in enumerate(ext, start=1):
         shift = 0
@@ -90,12 +94,13 @@ def export_db(db_path: Path, ids: list[int], out_parent: Path, margin_min: float
     ws.column_dimensions["B"].width = 100
     for name, df in [("세션비교", summ), ("회차전체", _tr_view(tr)),
                      ("회차선택", _tr_view(db.transects_df(db_path,list(sess.id)))),
-                     ("비교유량_회차별", reference_by_transect(sess, tr)),
+                     ("비교 유량", comparison),
                      ("회차별_수위", db.gauge_view(tr).drop(columns=["회차ID"], errors="ignore")),
                      ("측정지점_정보", _site_sheet(db_path, sess)),
                      ("측정버전_이력", allsess),
                      ("코드확인", catalog_review(db_path)),
                      ("등록시_점검내역", _checks(db_path, list(sess["id"])))]:
+        if name=="비교 유량" and df.empty:continue
         w = wb.create_sheet(name)
         write_df(w, df if not df.empty else pd.DataFrame({"안내": ["자료 없음"]}), 1)
     for s, m, vals in ext:
@@ -112,6 +117,8 @@ def export_db(db_path: Path, ids: list[int], out_parent: Path, margin_min: float
         audit["t_utc"] = audit["t_utc"].map(lambda t: None if pd.isna(t) else t.isoformat())
         w = wb.create_sheet(f"시각원문_{int(s['id'])}")
         write_df(w, audit, 1)
+    from rsq_compare.core.report import add_summary,from_database
+    add_summary(wb,from_database(sess,db.transects_df(db_path,list(sess.id))))
     xlsx = out / "누적비교.xlsx"
     wb.save(xlsx)
     return {"folder": out, "files": [xlsx] + files}

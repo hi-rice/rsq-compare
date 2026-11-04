@@ -301,6 +301,10 @@ class MainWindow(QMainWindow):
         hb.addWidget(self.lbl_detail, 1)
         v.addLayout(hb)
         self.lbl_detail_note = note_label("")
+        explain=QCheckBox("원본·구간 설명 보기")
+        explain.toggled.connect(self.lbl_detail_note.setVisible)
+        v.addWidget(explain)
+        self.lbl_detail_note.hide()
         v.addWidget(self.lbl_detail_note)
         self.detail_tabs = QTabWidget()
         self.detail_tabs.addTab(make_table(self.m_detail), "표 (.sum 원문)")
@@ -651,7 +655,18 @@ class MainWindow(QMainWindow):
             return
         self.settings.setValue("last_out", d)
         self._set_busy(True, "결과 저장 중...")
+        from rsq_compare.core import db
+        from rsq_compare.core.identity import fingerprint
+        from rsq_compare.core.workflow import reference_results
+        rows=db.sessions_df(self.dbtab.db_path)
+        rows=rows[rows.content_hash==fingerprint(self.sd)['content']]
+        context=rows.iloc[0].to_dict() if not rows.empty else {}
+        if not rows.empty:
+            tr=db.transects_df(self.dbtab.db_path,list(rows.id))
+            context['gauge']=db.gauge_view(tr)
+            context['comparison']=reference_results(self.dbtab.db_path,rows,tr)
         self.runner.start(export_all, self.sd, self.selected_nums(), Path(d),
+                          context=context,
                           include_vel_plot=self.chk_vel.isChecked(),
                           on_done=self._on_saved,
                           on_fail=lambda m, dt: self._error(

@@ -83,7 +83,7 @@ def reference_results(path,sess,tr):
         obs=records[records.session_id==s.id]
         # 기존 기준값도 측정 전체 기준값으로만 해석한다. 회차 관측값으로 복제하지 않는다.
         if pd.notna(s.get('ref_q')):
-            obs=pd.concat([obs,pd.DataFrame([dict(value=s.ref_q,unit=s.get('ref_unit'),source=s.get('ref_source'),site_key=site_key(s),scope='session')])],ignore_index=True)
+            obs=pd.concat([obs,pd.DataFrame([dict(value=s.ref_q,unit=s.get('ref_unit'),source=s.get('ref_source'),site_key=s.get('ref_site_key'),scope='session')])],ignore_index=True)
         for _,o in obs.iterrows():
             ts=tr[(tr.session_id==s.id)&(tr.has_summary==1)]
             reason='';label='측정 전체 기준값 (동시 관측 아님)'

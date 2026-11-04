@@ -34,7 +34,10 @@ def session_summary(sess: pd.DataFrame, tr: pd.DataFrame) -> pd.DataFrame:
         cov = (psd / mean) if (psd is not None and mean not in (None, 0)) else None
         ref = s.get("ref_q")
         ref = None if ref is None or pd.isna(ref) else float(ref)
-        diff = (mean - ref) if (mean is not None and ref is not None) else None
+        from rsq_compare.core.external import norm_unit
+        from rsq_compare.core.workflow import site_key
+        allowed=bool(s.get('ref_site_key')) and s.get('ref_site_key')==site_key(s) and norm_unit(s.get('ref_unit'))==norm_unit(s.get('q_unit'))
+        diff = (mean - ref) if (mean is not None and ref is not None and allowed) else None
         pct = (diff / ref * 100) if (diff is not None and ref != 0) else None
         u = s.get("q_unit") or ""
         rows.append({
@@ -57,18 +60,10 @@ def session_summary(sess: pd.DataFrame, tr: pd.DataFrame) -> pd.DataFrame:
 
 
 def reference_by_transect(sess: pd.DataFrame, tr: pd.DataFrame) -> pd.DataFrame:
-    ref = {r["id"]: r["ref_q"] for _, r in sess.iterrows() if r.get("ref_q") is not None and not pd.isna(r.get("ref_q"))}
-    rows = []
-    for _, t in tr[tr["has_summary"] == 1].iterrows():
-        rq = ref.get(t["session_id"])
-        if rq is None:
-            continue
-        q = t["total_q"]
-        d = None if q is None or pd.isna(q) else q - rq
-        rows.append({"등록ID": t["session_id"], "세션": t["session_name"], "회차": t["label"],
-                     "회차 Total Q [DIS]": q, "비교 유량": rq, "회차 − 비교 유량": d,
-                     "(회차 − 비교 유량) / 비교 유량 (%)": (d / rq * 100) if (d is not None and rq != 0) else None})
-    return pd.DataFrame(rows)
+    """이전 API 호환: 측정 전체 기준값을 회차 관측값으로 복제하지 않는다."""
+    summary=session_summary(sess,tr)
+    if summary.empty:return summary
+    return summary[summary['비교 유량 출처'].notna()].assign(적용범위='측정 전체 기준값 · 동시 관측 아님')
 
 
 def fig_sessions(sess: pd.DataFrame, tr: pd.DataFrame) -> Figure:
@@ -106,7 +101,7 @@ def fig_sessions(sess: pd.DataFrame, tr: pd.DataFrame) -> Figure:
     ax.set_title(f"측정 {len(sess)}건의 회차 분포 · 측정별로 따로 비교", fontsize=11)
     ax.grid(axis="y", alpha=0.3)
     ax.spines[["top", "right"]].set_visible(False)
-    ax.legend(fontsize=8, loc="best")
+    if ax.get_legend_handles_labels()[0]:ax.legend(fontsize=8, loc="best")
     return fig
 
 
@@ -173,4 +168,20 @@ def fig_external(values: pd.DataFrame, matched: pd.DataFrame, name: str, unit: s
     from matplotlib.dates import DateFormatter
     ax.xaxis.set_major_formatter(DateFormatter("%m-%d %H:%M", tz=timezone.utc))
     fig.autofmt_xdate()
+    return fig
+
+
+def fig_comparisons(results):
+    _ensure_font()
+    fig=Figure(figsize=(10,5.4),dpi=100,layout='constrained');ax=fig.add_subplot(111)
+    if results.empty:
+        ax.text(.5,.5,'비교 유량을 입력하세요',ha='center',va='center',transform=ax.transAxes);ax.set_axis_off();return fig
+    valid=results[results['차이(RS5−비교)'].notna()]
+    if valid.empty:
+        ax.text(.5,.5,'지점·단위·적용 범위를 확인하세요\n이유는 아래 표에서 확인할 수 있습니다.',ha='center',va='center',transform=ax.transAxes);ax.set_axis_off();return fig
+    x=np.arange(len(valid))
+    ax.scatter(x-.1,valid['RS5 유량 [DIS]'],label='RS5 유량 [DIS]',color='#2563a8')
+    ax.scatter(x+.1,valid['비교 유량'],label='비교값',marker='D',color='#c2410c')
+    ax.set_xticks(x,[f"{r['지점']}\n{r['적용 범위']}" for _,r in valid.iterrows()]);ax.set_ylabel('유량 · 단위는 표 참조')
+    ax.set_title('조건이 맞는 자료만 비교 · 선으로 연결하지 않음');ax.legend();ax.grid(axis='y',alpha=.3)
     return fig

@@ -31,6 +31,7 @@ from rsq_compare.core.tables import (
     stats_tables,
     summary_table,
     sum_with_sections,
+    q_unit,
 )
 
 FORMULA_PREFIX = ("=", "+", "-", "@", "\t", "\r")
@@ -86,6 +87,7 @@ def write_df(ws, df: pd.DataFrame, start_row: int = 1, autosize: bool = True):
             val, force_str = _safe(v)
             c = ws.cell(row=i, column=j)
             c.value = val
+            if isinstance(val,float):c.number_format='0.0000" %"' if '%' in str(df.columns[j-1]) else '0.0000'
             if force_str or isinstance(val, str):
                 c.data_type = "s"  # 수식 실행 방지
     ws.freeze_panes = ws.cell(row=start_row + 1, column=1)
@@ -129,13 +131,15 @@ def _unique_dir(base: Path) -> Path:
 
 def _source_files(sd: SessionData) -> list[Path]:
     files = [p for p in (sd.dis_path, sd.files.rsqmb) if p]
-    for num in sorted(sd.files.details):
-        files += [sd.files.details[num][k] for k in ("sum", "vel", "snr") if k in sd.files.details[num]]
+    from rsq_compare.core.discovery import DETAIL_RE
+    for path in sorted(sd.files.folder.iterdir()):
+        match=DETAIL_RE.fullmatch(path.name)
+        if match and match['session']==sd.files.name:files.append(path)
     return files
 
 
 def export_all(sd: SessionData, selected_nums: list[int], out_parent: Path,
-               include_vel_plot: bool = True, progress: Callable[[str], None] | None = None) -> dict:
+               include_vel_plot: bool = True, progress: Callable[[str], None] | None = None, context: dict | None = None) -> dict:
     say = progress or (lambda _m: None)
     out_parent = Path(out_parent)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -152,6 +156,8 @@ def export_all(sd: SessionData, selected_nums: list[int], out_parent: Path,
     say("그래프 저장 중...")
     fig = fig_q_bar(sd, selected_nums, st)
     p = png_dir / "01_회차별_총유량_DIS.png"
+    fmt=lambda x:'계산 불가' if x is None else f'{x:.4f}'
+    fig.suptitle(f'선택 {st.n}회 · 평균 {fmt(st.mean)} {q_unit(sd)}\n표본SD(n−1) {fmt(st.std)} · 모SD(n) {fmt(st.pstd)} · COV {fmt(st.cov)} (무차원)',fontsize=10)
     fig.savefig(p, dpi=150)
     written.append(p)
     for r in sd.records:
@@ -229,6 +235,12 @@ def export_all(sd: SessionData, selected_nums: list[int], out_parent: Path,
         ])
         write_df(w, df, nr + 1)
 
+    from rsq_compare.core.report import add_summary,from_session
+    add_summary(wb,[from_session(sd,selected_nums,context)])
+    if context:
+        for name,key in [('수위_사용자입력','gauge'),('비교_사용자입력','comparison')]:
+            data=context.get(key)
+            if data is not None and not data.empty:write_df(wb.create_sheet(name),data,1)
     xlsx = out / f"{sd.files.name}_회차비교.xlsx"
     wb.save(xlsx)
     written.insert(0, xlsx)
