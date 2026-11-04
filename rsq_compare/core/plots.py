@@ -74,24 +74,18 @@ def fig_q_bar(sd: SessionData, selected_nums: list[int], st: SelStats) -> Figure
                     color="#9a3412")
     if st.mean is not None:
         ax.axhline(st.mean, color="#111", lw=1.1, ls="--")
-        txt = f"선택 회차 산술평균 {_fmt(st.mean)}  (n={st.n})"
-        txt += f"\n표본표준편차(n−1) {_fmt(st.std) if st.std is not None else '계산 불가'}"
-        txt += f"  ·  [RSQ 방식] 모표준편차(n) {_fmt(st.pstd)}"
-        txt += f", COV {st.cov:.3f}" if st.cov is not None else ""
-        ax.text(0.01, 0.99, txt, transform=ax.transAxes, ha="left", va="top", fontsize=9,
-                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#999", lw=0.6))
     ax.set_xticks(x, labels)
     ax.axhline(0, color="#666", lw=0.6)
     u = q_unit(sd)
     ax.set_xlabel("회차 (원래 파일명의 T번호)")
     ax.set_ylabel(f"RSQ 총유량 ({u})" if u else "RSQ 총유량")
     ax.set_ylim(min(0, min([q for q in qs if q is not None] or [0]) * 1.15), ymax * 1.2)
-    ax.set_title("회차별 RSQ 총유량 — DIS에 기록된 RSQ 결과", fontsize=11)
+    ax.set_title("회차별 유량 · DIS 기록값", fontsize=11, pad=32)
     ax.spines[["top", "right"]].set_visible(False)
     from matplotlib.patches import Patch
-    ax.legend(handles=[Patch(color=C_SEL, label=f"비교 선택 회차 ({STATS_TITLE} 대상)"),
+    ax.legend(handles=[Patch(color=C_SEL, label="선택 회차"),
                        Patch(color=C_UNSEL, label="미선택 회차")],
-              loc="upper right", fontsize=8.5, frameon=False)
+              loc="lower left", bbox_to_anchor=(0,1.0), ncol=2, fontsize=9, frameon=False)
     return fig
 
 

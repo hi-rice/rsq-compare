@@ -53,11 +53,11 @@ def norm_unit(u: str | None) -> str:
     return {"cms": "m3/s"}.get(s, s)
 
 
-def read_raw_table(path: Path) -> pd.DataFrame:
+def read_raw_table(path: Path, sheet_name=0) -> pd.DataFrame:
     """파일을 문자열 표로 읽는다(열 고르기 화면용)."""
     path = Path(path)
     if path.suffix.lower() in (".xlsx", ".xlsm", ".xls"):
-        df = pd.read_excel(path, dtype=str)
+        df = pd.read_excel(path, dtype=str, sheet_name=sheet_name)
     else:
         df, last = None, None
         for enc in ENCODINGS:
@@ -71,6 +71,7 @@ def read_raw_table(path: Path) -> pd.DataFrame:
     df.columns = [str(c).strip() for c in df.columns]
     if df.shape[1] < 2:
         raise ValueError("열이 2개 이상 필요합니다(시각, 값).")
+    df.attrs["sheet_name"] = str(sheet_name) if path.suffix.lower() != ".csv" else "CSV"
     return df
 
 

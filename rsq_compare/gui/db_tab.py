@@ -52,6 +52,7 @@ from rsq_compare.core.external import (
     guess_time_column,
     match_to_transects,
     read_raw_table,
+    normalized_values,
 )
 from rsq_compare.core.multi import NOTE_MULTI, fig_external, fig_reference, fig_sessions, reference_by_transect, session_summary
 from rsq_compare.core.parsers import to_number
@@ -76,6 +77,7 @@ class SeriesDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(f"외부 자료 불러오기 — {path.name}")
         self.resize(760, 560)
+        self.raw = raw
         v = QVBoxLayout(self)
         f = QFormLayout()
         self.tcol = QComboBox()
@@ -148,6 +150,12 @@ class SeriesDialog(QDialog):
         v.addWidget(self.tbl, 1)
         v.addWidget(QLabel("강우 구간값은 구간 끝 시각을 사용합니다. 종류·단위·간격을 확인하세요."))
         v.addWidget(QLabel("<b>미리보기</b> (앞 5행)"))
+        self.preview_note = QLabel()
+        self.preview_note.setWordWrap(True)
+        v.addWidget(self.preview_note)
+        self.preview_table = QTableWidget(0,4)
+        self.preview_table.setHorizontalHeaderLabels(["시각 원문","적용 기준","시각 UTC","값"])
+        v.addWidget(self.preview_table)
         prev = QTableWidget(min(5, len(raw)), len(raw.columns))
         prev.setHorizontalHeaderLabels(list(raw.columns))
         for i in range(min(5, len(raw))):
@@ -156,9 +164,25 @@ class SeriesDialog(QDialog):
         prev.setMaximumHeight(170)
         v.addWidget(prev)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.tcol.currentTextChanged.connect(self.update_preview)
+        self.basis.currentTextChanged.connect(self.update_preview)
+        self.tbl.itemChanged.connect(self.update_preview)
+        self.update_preview()
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
         v.addWidget(bb)
+
+    def update_preview(self,*_):
+        columns=[c[0] for c in self.chosen()] or [c for c in self.raw.columns if c!=self.tcol.currentText()][:1]
+        if not columns:return
+        values,dropped=extract_series(self.raw,self.tcol.currentText(),columns[0])
+        normalized=normalized_values(values,self.basis.currentText())
+        self.preview_note.setText(f'전체 {len(self.raw)}행 · 읽은 시각 {len(values)}행 · 시각 실패 {dropped}행 · 값 결측 {values.value.isna().sum()}행 · 미리보기: {columns[0]}')
+        self.preview_table.setRowCount(min(5,len(values)))
+        for i,r in normalized.head(5).iterrows():
+            for j,value in enumerate([r.t_raw,r.time_applied,str(r.t_utc),r.value]):
+                self.preview_table.setItem(i,j,QTableWidgetItem('' if pd.isna(value) else str(value)))
+        self.preview_table.resizeColumnsToContents()
 
     def chosen(self):
         out = []
@@ -218,7 +242,7 @@ class DbTab(QWidget):
         v.addLayout(r1)
         r2 = QHBoxLayout()
         self.b_import = QPushButton("📥 폴더에서 새 측정 가져오기")
-        self.b_cat = QPushButton("소하천 목록 불러오기(220개소 등)")
+        self.b_cat = QPushButton("소하천 목록 가져오기")
         self.b_ref = QPushButton("비교 유량 양식 불러오기")
         self.b_ext = QPushButton("외부 자료(수위·유량·강우) 불러오기")
         self.b_export = QPushButton("💾 비교 결과 저장")
@@ -226,7 +250,8 @@ class DbTab(QWidget):
         self.b_review.clicked.connect(self.review_measurement)
         self.b_code_review = QPushButton("코드 행 선택")
         self.b_code_review.clicked.connect(self.review_code)
-        self.b_del = QPushButton("체크한 등록 삭제")
+        self.b_del = QPushButton("등록 삭제")
+        self.b_del.setProperty("danger",True)
         for b in (self.b_import, self.b_cat, self.b_ref, self.b_ext, self.b_export, self.b_del, self.b_review, self.b_code_review):
             r2.addWidget(b)
         r2.addStretch(1)
@@ -261,6 +286,7 @@ class DbTab(QWidget):
         w.addWidget(make_table(self.m_summ))
         w.setSizes([430, 250])
         self.ph_s = Placeholder(w, "")
+        self.ph_s.add_action("측정 가져오기",self.import_dir)
         self.tabs.addTab(self.ph_s, "세션 비교")
 
         # 지점·수위
@@ -272,6 +298,12 @@ class DbTab(QWidget):
         self.lbl_site.setStyleSheet("background:#f6f8fa; padding:6px; border:1px solid #ddd;")
         gv.addWidget(self.lbl_site)
         sh = QHBoxLayout()
+        self.b_site = QPushButton('지점 선택')
+        self.b_site.clicked.connect(self.choose_site)
+        sh.addWidget(self.b_site)
+        self.b_gauge = QPushButton('수위 입력')
+        self.b_gauge.clicked.connect(lambda:self.enter_observation('gauge'))
+        sh.addWidget(self.b_gauge)
         self.b_use_gps = QPushButton("GPS 제안 소하천코드 적용")
         self.b_use_gps.setEnabled(False)
         sh.addWidget(self.b_use_gps)
@@ -281,6 +313,7 @@ class DbTab(QWidget):
         self.tbl_gh = QTableWidget(0, 0)
         gv.addWidget(self.tbl_gh, 1)
         self.ph_g = Placeholder(w, "")
+        self.ph_g.add_action("측정 가져오기",self.import_dir)
         self.tabs.addTab(self.ph_g, "지점·수위")
 
         self.fig_r = FigureBox()
@@ -288,14 +321,18 @@ class DbTab(QWidget):
         w = QSplitter(Qt.Horizontal)
         w.addWidget(self.fig_r)
         w.addWidget(make_table(self.m_ref))
-        self.tabs.addTab(w, "비교 유량")
+        self.ph_ref = Placeholder(w,'비교값이 없습니다. 출처와 적용 범위를 지정해 입력하세요.')
+        self.ph_ref.add_action('비교 유량 입력',lambda:self.enter_observation('reference'))
+        self.ph_ref.add_action('파일 가져오기',self.import_ref)
+        self.tabs.addTab(self.ph_ref, "비교 유량")
 
         w = QWidget()
         ev = QVBoxLayout(w)
         eh = QHBoxLayout()
         eh.addWidget(QLabel("외부 자료:"))
         self.cmb_series = QComboBox()
-        self.cmb_series.setMinimumWidth(380)
+        self.cmb_series.setMinimumWidth(180)
+        self.cmb_series.setMaximumWidth(340)
         eh.addWidget(self.cmb_series)
         eh.addWidget(QLabel("시간창 앞뒤 여유(분):"))
         self.spin_margin = QDoubleSpinBox()
@@ -321,6 +358,7 @@ class DbTab(QWidget):
         es.setSizes([380, 260])
         ev.addWidget(es, 1)
         self.ph_e = Placeholder(w, "")
+        self.ph_e.add_action("외부 자료 추가",self.import_ext)
         self.tabs.addTab(self.ph_e, "외부 자료 연결")
         self.m_tr = DataFrameModel()
         self.tabs.addTab(make_table(self.m_tr), "회차 전체")
@@ -369,7 +407,8 @@ class DbTab(QWidget):
         except Exception as e:  # noqa: BLE001
             QMessageBox.warning(self, "DB 열기 실패", f"누적 DB를 열지 못했습니다.\n{self.db_path}\n{e}")
             self.sess, self.cat = pd.DataFrame(), pd.DataFrame()
-        self.lbl_db.setText(f"{self.db_path}   (등록 {len(self.sess)}건 · 소하천 목록 {len(self.cat)}곳)")
+        self.lbl_db.setText(f"측정 {len(self.sess)}건 · 선택 가능한 소하천 {len(self.cat)}곳")
+        self.lbl_db.setToolTip(str(self.db_path))
         tr_all = db.transects_df(self.db_path) if not self.sess.empty else pd.DataFrame()
         summ = session_summary(self.sess, tr_all) if not self.sess.empty else pd.DataFrame()
         mcol = next((c for c in summ.columns if c.startswith("회차 Total Q 산술평균")), None)
@@ -498,7 +537,10 @@ class DbTab(QWidget):
         self.m_summ.set_df(summ)
         self.ph_s.show_content()
         self.fig_r.set_figure(fig_reference(summ))
-        self.m_ref.set_df(reference_by_transect(sess, tr))
+        from rsq_compare.core.workflow import reference_results
+        comparison=reference_results(self.db_path,sess,tr)
+        self.m_ref.set_df(comparison)
+        self.ph_ref.show_empty('비교값이 없습니다. 출처와 적용 범위를 지정해 입력하세요.') if comparison.empty else self.ph_ref.show_content()
         self.m_tr.set_df(_tr_view(tr))
         self.refresh_ext()
 
@@ -647,6 +689,22 @@ class DbTab(QWidget):
             self.refresh_ext()
 
     # ------------------------------------------------------------ 작업
+    def choose_site(self):
+        sid=self._current_sid()
+        if sid is None:
+            QMessageBox.information(self,'지점 선택','먼저 측정을 선택하세요.');return
+        from rsq_compare.gui.input_dialogs import SiteDialog
+        if SiteDialog(self,self.db_path,sid).exec():
+            self.reload();self.main.statusBar().showMessage('지점 저장 완료',5000)
+
+    def enter_observation(self,kind):
+        sid=self._current_sid()
+        if sid is None:
+            QMessageBox.information(self,'입력','먼저 측정을 선택하세요.');return
+        from rsq_compare.gui.input_dialogs import ObservationDialog
+        if ObservationDialog(self,self.db_path,sid,kind).exec():
+            self.reload();self.main.statusBar().showMessage('입력 저장 완료',5000)
+
     def review_measurement(self):
         sid = self._current_sid()
         if sid is None:
@@ -737,7 +795,12 @@ class DbTab(QWidget):
         if not p:
             return
         try:
-            raw = read_raw_table(Path(p))
+            sheet=0
+            if Path(p).suffix.lower() in ('.xlsx','.xlsm'):
+                with pd.ExcelFile(p) as book:names=book.sheet_names
+                sheet,ok=QInputDialog.getItem(self,'시트 선택','불러올 시트',names,0,False)
+                if not ok:return
+            raw = read_raw_table(Path(p),sheet)
         except Exception as e:  # noqa: BLE001
             QMessageBox.warning(self, "파일 읽기 실패", str(e))
             return
@@ -758,7 +821,7 @@ class DbTab(QWidget):
                     continue
                 db.add_series(self.db_path, f"{dlg.prefix.text().strip()} {col}".strip(), unit, dlg.basis.currentText(),
                               list(vals["t_raw"]), list(vals["value"]), Path(p),
-                              dropped, site_code=dlg.site_code(), kind=kind, target_session_id=dlg.target.currentData(),
+                              dropped, memo=f"시트: {raw.attrs.get('sheet_name','CSV')}", site_code=dlg.site_code(), kind=kind, target_session_id=dlg.target.currentData(),
                               rain_type=rain if kind == "강우" else None,
                               rain_interval_min=float(interval) if kind == "강우" and interval else None)
                 msgs.append(f"'{col}' [{kind}]: {len(vals)}개 값, 시각 못 읽어 뺀 행 {dropped}개, "

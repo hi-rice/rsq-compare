@@ -28,7 +28,7 @@ from rsq_compare.core.parsers import to_number
 from rsq_compare.core.sites import CODE_RE, gps_from_sum
 from rsq_compare.core.tables import q_unit, time_basis
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -110,13 +110,13 @@ def connect(db_path: Path):
 
 # v0.4에서 추가된 열 (예전 DB는 열기만 하면 자동으로 추가됨, 기존 자료는 그대로)
 MIGRATE_COLUMNS = {
-    "sessions": [("site_code", "TEXT"), ("site_code_source", "TEXT"), ("station_number_raw", "TEXT"),
+    "sessions": [("local_site_id", "TEXT"), ("site_code", "TEXT"), ("site_code_source", "TEXT"), ("station_number_raw", "TEXT"),
                  ("operator", "TEXT"), ("gps_lat", "REAL"), ("gps_lon", "REAL"), ("gps_n", "INTEGER"), ("content_hash", "TEXT"), ("detail_hash", "TEXT"),
                  ("anchor_hash", "TEXT"), ("manifest_json", "TEXT"), ("measurement_id", "INTEGER"),
                  ("previous_id", "INTEGER"), ("review_status", "TEXT DEFAULT 'confirmed'"),
                  ("review_note", "TEXT"), ("compare_selected", "INTEGER DEFAULT 1")],
     "transects": [("gh_start", "REAL"), ("gh_start_time", "TEXT"), ("gh_end", "REAL"), ("gh_end_time", "TEXT"),
-                  ("gh_unit", "TEXT"), ("gh_manual", "REAL"), ("gh_manual_time", "TEXT"), ("gh_manual_note", "TEXT"), ("compare_selected", "INTEGER DEFAULT 1"), ("selection_explicit", "INTEGER DEFAULT 0")],
+                  ("gh_unit", "TEXT"), ("gh_manual", "REAL"), ("gh_manual_time", "TEXT"), ("gh_manual_note", "TEXT"), ("gh_manual_unit", "TEXT DEFAULT 'm'"), ("gh_datum", "TEXT DEFAULT '미확인'"), ("gh_source", "TEXT"), ("compare_selected", "INTEGER DEFAULT 1"), ("selection_explicit", "INTEGER DEFAULT 0")],
     "ext_series": [("site_code", "TEXT"), ("kind", "TEXT"), ("target_session_id", "INTEGER"),
                    ("rain_type", "TEXT"), ("rain_interval_min", "REAL")],
     "ext_values": [("t_raw", "TEXT"), ("t_utc", "TEXT"), ("time_applied", "TEXT")],
@@ -174,12 +174,16 @@ def _prepare_v4(path):
 def init_db(db_path: Path) -> None:
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    from rsq_compare.core.workflow import backup_upgrade
+    backup_upgrade(db_path)
     _prepare_v4(db_path)
     with connect(db_path) as con:
         con.executescript(SCHEMA)
         _migrate(con)
         from rsq_compare.core.catalog import initialize_catalog
         initialize_catalog(con)
+        from rsq_compare.core.workflow import initialize
+        initialize(con)
         con.execute("UPDATE sessions SET measurement_id=id WHERE measurement_id IS NULL")
         if not con.execute("SELECT 1 FROM meta WHERE key='legacy_identity_review'").fetchone():
             from rsq_compare.core.identity import digest
@@ -419,10 +423,10 @@ def sessions_df(db_path: Path) -> pd.DataFrame:
     return read_table(db_path, """
         SELECT s.*, EXISTS(SELECT 1 FROM catalog_entries ce WHERE ce.site_code=s.site_code
           AND NOT EXISTS(SELECT 1 FROM site_catalog sc WHERE sc.site_code=ce.site_code)) AS catalog_conflict, r.ref_q, r.unit AS ref_unit, r.source AS ref_source, r.memo AS ref_memo,
-               c.river_name, c.sido, c.sigungu, c.sensor_type, c.interval_min,
+               COALESCE(c.river_name,l.name) AS river_name, c.sido, COALESCE(c.sigungu,l.region) AS sigungu, c.sensor_type, c.interval_min,
                c.aws_id, c.aws_name, c.aws_dist_km, c.obs_lat, c.obs_lon
         FROM sessions s LEFT JOIN reference_q r ON r.session_id = s.id
-        LEFT JOIN site_catalog c ON c.site_code = s.site_code
+        LEFT JOIN site_catalog c ON c.site_code = s.site_code LEFT JOIN local_sites l ON l.id=s.local_site_id
         ORDER BY COALESCE(s.first_start_time, s.date_measured, s.registered_at), s.id""")
 
 
@@ -525,7 +529,7 @@ def catalog_df(db_path: Path) -> pd.DataFrame:
 
 def set_site_code(db_path: Path, sid: int, code: str | None, source: str = "직접 입력") -> None:
     with connect(db_path) as con:
-        con.execute("UPDATE sessions SET site_code=?, site_code_source=? WHERE id=?",
+        con.execute("UPDATE sessions SET local_site_id=NULL, site_code=?, site_code_source=? WHERE id=?",
                     (code or None, source if code else None, int(sid)))
 
 
@@ -555,11 +559,12 @@ def gauge_view(tr: pd.DataFrame) -> pd.DataFrame:
         else:
             use, src = None, "없음"
         note = ""
-        if rsq is not None and man is not None and abs(rsq - man) > 1e-9:
-            note = f"불일치: RSQ {rsq:g} vs 직접 입력 {man:g} → RSQ 기록 사용"
+        if rsq is not None and man is not None:
+            note = "기준면 확인 전 직접 비교하지 않음"
         rows.append({"회차ID": t["id"], "등록ID": t["session_id"], "세션": t.get("session_name"), "회차": t["label"],
                      "RSQ 시작 수위": t.get("gh_start"), "RSQ 시작 관측시각": t.get("gh_start_time"),
                      "RSQ 끝 수위": t.get("gh_end"), "RSQ 끝 관측시각": t.get("gh_end_time"),
                      "직접 입력 수위": man, "직접 입력 시각": t.get("gh_manual_time"), "직접 입력 메모": t.get("gh_manual_note"),
-                     "사용 수위": use, "출처": src, "비고": note})
+                     "사용 수위": use, "출처": src, "수위 단위": t.get("gh_unit") or "m" if rsq is not None else t.get("gh_manual_unit") or "m",
+                     "직접 입력 기준면": t.get("gh_datum") or "미확인", "직접 입력 출처": t.get("gh_source"), "비고": note})
     return pd.DataFrame(rows)

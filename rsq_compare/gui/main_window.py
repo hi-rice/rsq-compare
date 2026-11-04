@@ -56,11 +56,12 @@ from rsq_compare.core.tables import (
 from rsq_compare.core.loader import SECTION_ORDER
 from rsq_compare.core.parsers import dis_overview
 from rsq_compare.gui.df_model import DataFrameModel
+from rsq_compare.gui.common import CopyTable, apply_theme
 
 
 # ---------------------------------------------------------------- 작은 부품들
 def make_table(model: DataFrameModel) -> QTableView:
-    tv = QTableView()
+    tv = CopyTable()
     tv.setModel(model)
     tv.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
     tv.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
@@ -69,7 +70,7 @@ def make_table(model: DataFrameModel) -> QTableView:
     tv.setEditTriggers(QAbstractItemView.NoEditTriggers)
     tv.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
     tv.horizontalHeader().setDefaultSectionSize(110)
-    tv.verticalHeader().setDefaultSectionSize(22)
+    tv.verticalHeader().setDefaultSectionSize(32)
     model.modelReset.connect(lambda: _fit_columns(tv))
     return tv
 
@@ -95,12 +96,21 @@ class Placeholder(QStackedWidget):
 
     def __init__(self, content: QWidget, empty_text: str):
         super().__init__()
+        self._empty = QWidget()
+        self._empty_layout = QVBoxLayout(self._empty)
         self._msg = QLabel(empty_text)
+        self._empty_layout.addWidget(self._msg)
+        self._actions = QHBoxLayout()
+        self._empty_layout.addLayout(self._actions)
         self._msg.setAlignment(Qt.AlignCenter)
         self._msg.setWordWrap(True)
         self._msg.setStyleSheet("color:#666; font-size:14px; padding:30px;")
-        self.addWidget(self._msg)
+        self.addWidget(self._empty)
         self.addWidget(content)
+
+    def add_action(self,text,callback):
+        button=QPushButton(text);button.clicked.connect(callback);self._actions.addWidget(button)
+        return button
 
     def show_empty(self, text: str):
         self._msg.setText(text)
@@ -134,6 +144,7 @@ class FigureBox(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self, runner):
         super().__init__()
+        apply_theme(__import__("PySide6.QtWidgets",fromlist=["QApplication"]).QApplication.instance())
         self.runner = runner
         self.sessions: list[SessionFiles] = []
         self.scan_checks = []
@@ -150,23 +161,32 @@ class MainWindow(QMainWindow):
         root = QVBoxLayout(central)
 
         top = QHBoxLayout()
-        self.btn_folder = QPushButton("📂 데이터 폴더 선택")
+        self.btn_folder = QPushButton("1  측정 가져오기")
         self.lbl_folder = QLabel("폴더를 선택하세요 (압축을 푼 RSQ 내보내기 폴더)")
         self.lbl_folder.setStyleSheet("color:#555;")
         self.cmb_session = QComboBox()
-        self.cmb_session.setMinimumWidth(320)
+        self.cmb_session.setMinimumWidth(170)
+        self.cmb_session.setMaximumWidth(320)
         self.cmb_session.setPlaceholderText("세션 없음")
         self.chk_vel = QCheckBox(".vel 셀 속도 분포 그림도 저장")
         self.chk_vel.setChecked(True)
-        self.btn_save = QPushButton("💾 결과 저장")
+        self.btn_save = QPushButton("4  결과 저장")
+        self.btn_save.setProperty("primary",True)
         self.btn_reg = QPushButton("📥 누적 DB에 등록")
         self.btn_reg.setToolTip("지금 보고 있는 세션(선택한 .dis 기준)을 '② 누적·비교' 탭의 DB에 쌓습니다.")
         top.addWidget(self.btn_folder)
-        top.addWidget(self.lbl_folder, 1)
+        self.lbl_folder.hide()
         top.addWidget(QLabel("세션:"))
         top.addWidget(self.cmb_session)
-        top.addWidget(self.chk_vel)
+        self.chk_vel.hide()
         top.addWidget(self.btn_save)
+        self.btn_point = QPushButton('2  지점 지정')
+        self.btn_point.clicked.connect(self.assign_current_site)
+        top.insertWidget(1,self.btn_point)
+        self.btn_compare = QPushButton("3  회차·비교")
+        self.btn_compare.clicked.connect(lambda:self.tabs.setCurrentIndex(1))
+        top.insertWidget(2,self.btn_compare)
+        self.btn_reg.setText('누적 등록')
         top.addWidget(self.btn_reg)
         root.addLayout(top)
 
@@ -174,11 +194,13 @@ class MainWindow(QMainWindow):
         top2 = QHBoxLayout()
         top2.addWidget(QLabel("DIS 파일:"))
         self.cmb_dis = QComboBox()
-        self.cmb_dis.setMinimumWidth(380)
+        self.cmb_dis.setMinimumWidth(180)
+        self.cmb_dis.setMaximumWidth(360)
         self.cmb_dis.setToolTip("요약 결과(유량 등)를 읽을 .dis 파일. RSQ에서 다시 내보낸 .dis가 있으면 여기서 고릅니다.")
         self.btn_dis = QPushButton("다른 .dis 파일 선택…")
         self.lbl_dis = QLabel("")
         self.lbl_dis.setStyleSheet("color:#444;")
+        self.lbl_dis.setWordWrap(True)
         top2.addWidget(self.cmb_dis)
         top2.addWidget(self.btn_dis)
         top2.addWidget(self.lbl_dis, 1)
@@ -237,6 +259,7 @@ class MainWindow(QMainWindow):
         w = QWidget()
         v = QVBoxLayout(w)
         self.lbl_stats_note = note_label(f"<b>{STATS_TITLE}</b> — {STATS_NOTE}")
+        self.lbl_stats_note.setToolTip(STATS_NOTE)
         v.addWidget(self.lbl_stats_note)
         sp = QSplitter(Qt.Vertical)
         sp.addWidget(self.fig_bar)
@@ -308,10 +331,11 @@ class MainWindow(QMainWindow):
         # 맨 위 탭: ① 세션 보기 / ② 누적·비교
         from rsq_compare.gui.db_tab import DbTab
         self.main_tabs = QTabWidget()
-        self.main_tabs.addTab(central, "① 세션 보기 (한 세션)")
+        self.main_tabs.addTab(central, "① 측정 확인")
         self.dbtab = DbTab(self)
-        self.main_tabs.addTab(self.dbtab, "② 누적·비교 (현장 세션·지점·수위·외부 자료)")
+        self.main_tabs.addTab(self.dbtab, "② 지점·누적 비교")
         self.setCentralWidget(self.main_tabs)
+        self.ph_summary.add_action("측정 가져오기",self.choose_folder)
         self._db_buttons = [self.dbtab.b_import, self.dbtab.b_export]
         self.progress = QProgressBar()
         self.progress.setMaximumWidth(180)
@@ -445,6 +469,17 @@ class MainWindow(QMainWindow):
         self._refresh_all()
 
     # ------------------------------------------------------------ 목록
+    def assign_current_site(self):
+        if self.sd is None:
+            QMessageBox.information(self,'지점 지정','먼저 측정 폴더를 가져오세요.');return
+        from rsq_compare.core import db
+        status,sid,msg=db.register_session(self.dbtab.db_path,self.sd,selected_nums=self.selected_nums())
+        if sid is None:
+            QMessageBox.warning(self,'지점 지정',msg);return
+        from rsq_compare.gui.input_dialogs import SiteDialog
+        if SiteDialog(self,self.dbtab.db_path,sid).exec():
+            self.dbtab.reload();self.statusBar().showMessage('지점 저장 완료',5000)
+
     def _selection_key(self):
         import hashlib
         return 'transects/' + hashlib.sha256(str(self.sd.dis_path.resolve() if self.sd.dis_path else self.sd.files.folder).encode()).hexdigest()
@@ -536,6 +571,8 @@ class MainWindow(QMainWindow):
             return
         sel = self.selected_nums()
         st = selected_stats(sd, sel)
+        fmt=lambda x:'계산 불가' if x is None else f'{x:.4f}'
+        self.lbl_stats_note.setText(f'선택 {st.n}회 · 평균 {fmt(st.mean)} {q_unit(sd)}\n표본표준편차(n−1) {fmt(st.std)} · 모표준편차(n) {fmt(st.pstd)} · COV {fmt(st.cov)} (무차원)')
         s1, s2 = stats_tables(sd, st)
         self.m_stat_sum.set_df(s1)
         self.m_stat_det.set_df(s2)

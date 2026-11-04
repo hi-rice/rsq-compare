@@ -51,11 +51,11 @@ def validate_comparison(sess):
 
 def copy_inputs(con, old, new):
     # 이전 행은 그대로 보존한다. 새 버전에 이미 입력한 값은 덮어쓰지 않는다.
-    for col in ('memo','operator','site_code','site_code_source'):
+    for col in ('memo','operator','site_code','site_code_source','local_site_id'):
         con.execute(f'UPDATE sessions SET {col}=COALESCE({col},(SELECT {col} FROM sessions WHERE id=?)) WHERE id=?', (old,new))
     con.execute('''INSERT OR IGNORE INTO reference_q(session_id,ref_q,unit,source,memo,updated_at)
                    SELECT ?,ref_q,unit,source,memo,updated_at FROM reference_q WHERE session_id=?''',(new,old))
-    for col in ('gh_manual','gh_manual_time','gh_manual_note'):
+    for col in ('gh_manual','gh_manual_time','gh_manual_note','gh_manual_unit','gh_datum','gh_source'):
         con.execute(f"""UPDATE transects SET {col}=COALESCE({col},(SELECT p.{col} FROM transects p
                         WHERE p.session_id=? AND p.num=transects.num)) WHERE session_id=?""",(old,new))
     con.execute("""UPDATE transects SET compare_selected=(SELECT p.compare_selected FROM transects p
