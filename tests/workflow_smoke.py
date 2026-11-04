@@ -22,7 +22,7 @@ def main():
     source=Path(sys.argv[1]);output=Path(sys.argv[2]);output.mkdir(parents=True,exist_ok=True);before=hashes(source)
     app=QApplication.instance() or QApplication([])
     with tempfile.TemporaryDirectory() as temp:
-        path=Path(temp)/'개인 DB.db';QSettings('NDMI','RSQCompare').setValue('db_path',str(path))
+        path=Path(temp)/'개인 DB.db';db.init_db(path);QSettings('NDMI','RSQCompare').setValue('db_path',str(path))
         w=MainWindow(JobRunner());w.show();w.open_folder(source)
         deadline=time.time()+60
         while w.sd is None or w.runner.busy():

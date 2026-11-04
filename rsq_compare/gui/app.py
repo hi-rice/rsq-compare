@@ -12,31 +12,31 @@ from rsq_compare.core.plots import setup_korean_font
 from rsq_compare.gui.main_window import MainWindow
 from rsq_compare.gui.workers import JobRunner
 
-LOG_FILE = Path.home() / "rsq_compare_오류기록.log"
-
-
 def _excepthook(exc_type, exc, tb):
-    detail = "".join(traceback.format_exception(exc_type, exc, tb))
+    from rsq_compare.runtime import log_error
     try:
-        with open(LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(f"\n[{datetime.now():%Y-%m-%d %H:%M:%S}]\n{detail}")
+        path=log_error(exc_type,tb)
+        message=f'작업을 완료하지 못했습니다. 입력과 파일 권한을 확인하세요.\n오류 종류: {exc_type.__name__}\n로그: {path}'
     except OSError:
-        pass
+        message=f'작업을 완료하지 못했습니다. 오류 종류: {exc_type.__name__} (로그 저장 불가)'
     if QApplication.instance():
-        box = QMessageBox(QMessageBox.Critical, "예상치 못한 오류",
-                          f"처리 중 오류가 발생했습니다. 프로그램은 계속 사용할 수 있습니다.\n\n{exc}\n\n"
-                          f"상세 내용은 '자세히' 버튼 또는 다음 파일에 기록됩니다:\n{LOG_FILE}")
-        box.setDetailedText(detail)
-        box.exec()
+        QMessageBox.critical(None,'작업 오류',message)
     else:
-        sys.__excepthook__(exc_type, exc, tb)
+        sys.__excepthook__(exc_type,exc,tb)
 
 
 def main(argv=None):
     argv = sys.argv if argv is None else argv
     sys.excepthook = _excepthook
     app = QApplication(argv)
-    app.setApplicationName("RSQ 회차 비교 도구")
+    from rsq_compare import APP_NAME,APP_VERSION
+    from rsq_compare.runtime import icon_path
+    from PySide6.QtGui import QIcon
+    app.setOrganizationName('NDMI');app.setApplicationName(APP_NAME);app.setApplicationVersion(APP_VERSION)
+    app.setWindowIcon(QIcon(str(icon_path())))
+    if sys.platform=='win32':
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('hi-rice.RSQCompare.Desktop')
     setup_korean_font()
     runner = JobRunner()
     win = MainWindow(runner)

@@ -1,4 +1,5 @@
 """모든 화면에 동일하게 적용하는 표시 규칙."""
+import sys
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont,QKeySequence
 from PySide6.QtWidgets import QApplication,QTableView,QAbstractItemView,QHeaderView,QMessageBox
@@ -23,7 +24,7 @@ QToolTip { background:#fffbe8; color:#15263c; border:1px solid #ac9d63; }
 
 
 def apply_theme(app):
-    app.setFont(QFont('Malgun Gothic' if __import__('sys').platform=='win32' else 'Noto Sans CJK KR',10))
+    app.setFont(QFont('Malgun Gothic' if sys.platform=='win32' else 'Noto Sans CJK KR',10))
     app.setStyleSheet(STYLE)
 
 

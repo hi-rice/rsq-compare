@@ -171,7 +171,7 @@ def fig_depth_speed(df: pd.DataFrame | None, label: str, sections: pd.Series | N
     if runs:
         what = f"'{subset_name}' 구간만" if subset_name else "전체 기록"
         fig.suptitle(f"{label}  .sum {what} — 구간 음영: .rsqmb에 기록된 샘플 타입(RSQ 기록값)", fontsize=11)
-        axes[-1].legend(handles=handles, loc="upper left", fontsize=8, frameon=True, ncol=len(handles))
+        axes[-1].legend(handles=handles, loc="lower left", bbox_to_anchor=(0,1), fontsize=8, frameon=False, ncol=len(handles))
     else:
         fig.suptitle(f"{label}  .sum 전체 기록 — 구간(시작 Edge/횡단/마침 Edge) 정보 없음", fontsize=11)
     return fig

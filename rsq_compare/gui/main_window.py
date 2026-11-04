@@ -10,12 +10,14 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import pandas as pd
 from pathlib import Path
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QCheckBox,
     QComboBox,
     QFileDialog,
@@ -147,12 +149,15 @@ class FigureBox(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self, runner):
         super().__init__()
-        apply_theme(__import__("PySide6.QtWidgets",fromlist=["QApplication"]).QApplication.instance())
+        apply_theme(QApplication.instance())
         self.runner = runner
         self.sessions: list[SessionFiles] = []
         self.scan_checks = []
         self.sd: SessionData | None = None
         self.settings = QSettings("NDMI", "RSQCompare")
+        from PySide6.QtGui import QIcon
+        from rsq_compare.runtime import icon_path
+        self.setWindowIcon(QIcon(str(icon_path())))
         self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}")
         self.resize(1400, 860)
         self._build_ui()
@@ -377,6 +382,9 @@ class MainWindow(QMainWindow):
 
     def _error(self, title: str, msg: str, detail: str = ""):
         self._set_busy(False, f"{title}: {msg}")
+        from rsq_compare.runtime import log_error
+        try:log_error(RuntimeError,None)
+        except OSError:pass
         box = QMessageBox(QMessageBox.Warning, title, msg, parent=self)
         if detail:
             box.setDetailedText(detail)
@@ -402,7 +410,9 @@ class MainWindow(QMainWindow):
         self.cmb_session.blockSignals(True)
         self.cmb_session.clear()
         for s in self.sessions:
-            self.cmb_session.addItem(s.key)
+            name=s.name if sum(x.name==s.name for x in self.sessions)==1 else f"{s.name} [{self.cmb_session.count()+1}]"
+            self.cmb_session.addItem(name)
+            self.cmb_session.setItemData(self.cmb_session.count()-1,str(s.folder),Qt.ToolTipRole)
         self.cmb_session.blockSignals(False)
         self._set_busy(False, f"세션 {len(self.sessions)}개를 찾았습니다.")
         if not self.sessions:
@@ -483,6 +493,7 @@ class MainWindow(QMainWindow):
         if self.sd is None:
             QMessageBox.information(self,'지점 지정','먼저 측정 폴더를 가져오세요.');return
         from rsq_compare.core import db
+        if not self.dbtab.ensure_database():return
         status,sid,msg=db.register_session(self.dbtab.db_path,self.sd,selected_nums=self.selected_nums())
         if sid is None:
             QMessageBox.warning(self,'지점 지정',msg);return
@@ -494,6 +505,7 @@ class MainWindow(QMainWindow):
         if self.sd is None:return
         from rsq_compare.core.identity import fingerprint
         from rsq_compare.core import db
+        if not self.dbtab.db_path.exists():return
         rows=db.sessions_df(self.dbtab.db_path)
         rows=rows[rows.content_hash==fingerprint(self.sd)['content']]
         if rows.empty:self.lbl_point.setText('지점 미지정 · 지점 지정 버튼에서 선택하세요.');return
@@ -592,7 +604,7 @@ class MainWindow(QMainWindow):
         sel = self.selected_nums()
         st = selected_stats(sd, sel)
         fmt=lambda x:'계산 불가' if x is None else f'{x:.4f}'
-        self.lbl_stats_note.setText(f'선택 {st.n}회 · 평균 {fmt(st.mean)} {q_unit(sd)}\n표본표준편차(n−1) {fmt(st.std)} · 모표준편차(n) {fmt(st.pstd)} · COV {fmt(st.cov)} (무차원)')
+        self.lbl_stats_note.setText(f'체크 {len(sel)}회 · 유효 유량 {st.n}회 · 평균 {fmt(st.mean)} {q_unit(sd)}\n표본표준편차(n−1) {fmt(st.std)} · 모표준편차(n) {fmt(st.pstd)} · COV {fmt(st.cov)} (무차원)')
         s1, s2 = stats_tables(sd, st)
         self.m_stat_sum.set_df(s1)
         self.m_stat_det.set_df(s2)
@@ -658,7 +670,7 @@ class MainWindow(QMainWindow):
         from rsq_compare.core import db
         from rsq_compare.core.identity import fingerprint
         from rsq_compare.core.workflow import reference_results
-        rows=db.sessions_df(self.dbtab.db_path)
+        rows=db.sessions_df(self.dbtab.db_path) if self.dbtab.db_path.exists() else pd.DataFrame(columns=["content_hash"])
         rows=rows[rows.content_hash==fingerprint(self.sd)['content']]
         context=rows.iloc[0].to_dict() if not rows.empty else {}
         if not rows.empty:

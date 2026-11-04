@@ -1,5 +1,10 @@
 # 개발 이어가기
 
+현재 업무 흐름 개선은 [단계별 검증](V05_VALIDATION.md)을 먼저 참고하세요.
+최종 사용자 배포 준비와 미실행 Windows 확인은 [Windows 빌드 안내](packaging/windows/README.md)에 있습니다.
+앱 제목·Excel·설치 메타데이터 버전은 `rsq_compare/__init__.py`의 APP_VERSION을 사용합니다.
+아래 v0.4.x 등록·검증 내용은 과거 작업 기록입니다.
+
 ## 등록한 소스
 
 `rsq_compare_v0.4.1_source.zip`의 최상위 포장 폴더를 제거해 등록했다.

@@ -53,6 +53,10 @@ def copy_inputs(con, old, new):
     # 이전 행은 그대로 보존한다. 새 버전에 이미 입력한 값은 덮어쓰지 않는다.
     for col in ('memo','operator','site_code','site_code_source','local_site_id'):
         con.execute(f'UPDATE sessions SET {col}=COALESCE({col},(SELECT {col} FROM sessions WHERE id=?)) WHERE id=?', (old,new))
+    old_point=con.execute('SELECT site_code,local_site_id,site_code_source FROM sessions WHERE id=?',(old,)).fetchone()
+    current_source=con.execute('SELECT site_code_source FROM sessions WHERE id=?',(new,)).fetchone()[0]
+    if old_point and (old_point[1] or old_point[2] and not old_point[2].startswith('RSQ 기록')) and (not current_source or current_source.startswith('RSQ 기록')):
+        con.execute('UPDATE sessions SET site_code=?,local_site_id=?,site_code_source=? WHERE id=?',(*old_point,new))
     con.execute('''INSERT OR IGNORE INTO reference_q(session_id,ref_q,unit,source,memo,updated_at,site_key)
                    SELECT ?,ref_q,unit,source,memo,updated_at,site_key FROM reference_q WHERE session_id=?''',(new,old))
     for col in ('gh_manual','gh_manual_time','gh_manual_note','gh_manual_unit','gh_datum','gh_source'):

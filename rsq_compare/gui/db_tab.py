@@ -223,8 +223,9 @@ class DbTab(QWidget):
         super().__init__()
         self.main = main
         self.runner = main.runner
-        default = str(Path.home() / "Documents" / "RSQ_측정기록.db")
-        self.db_path = Path(main.settings.value("db_path", default))
+        from rsq_compare.runtime import default_database
+        self.db_path = default_database(main.settings)
+        self._missing_saved_db = bool(main.settings.value("db_path")) and not self.db_path.exists()
         self.sess = pd.DataFrame()
         self._build()
         self.reload()
@@ -432,10 +433,22 @@ class DbTab(QWidget):
                                            "SQLite DB (*.db)", options=QFileDialog.DontConfirmOverwrite)
         if p:
             self.db_path = Path(p)
+            self._missing_saved_db = False
             self.main.settings.setValue("db_path", str(self.db_path))
             self.reload()
 
+    def ensure_database(self):
+        if self._missing_saved_db and not self.db_path.exists():
+            QMessageBox.information(self,'DB 위치 확인','기존 DB를 찾지 못했습니다. 연결을 확인하거나 DB를 직접 선택하세요. 새 DB로 바꾸지 않았습니다.')
+            self.choose_db()
+        return self.db_path.exists()
+
     def reload(self):
+        if self._missing_saved_db and not self.db_path.exists():
+            self.lbl_db.setText('기존 DB를 찾지 못했습니다 · DB 파일 열기/새로 만들기에서 직접 선택하세요.')
+            for ph in (self.ph_s,self.ph_g,self.ph_e):ph.show_empty('기존 DB 위치를 확인하세요. 연구자료를 새 DB로 대체하지 않았습니다.')
+            return
+        self._missing_saved_db=False
         keep_row = max(self.tbl.currentRow(), 0)
         try:
             db.init_db(self.db_path)
@@ -462,7 +475,7 @@ class DbTab(QWidget):
             river = _nn(s.get("river_name"))
             code = _nn(s.get("site_code"))
             name = s["session_name"] + (" [확인 필요]" if s.get("review_status")=="pending" else f" [재처리 · 이전 #{int(s.previous_id)}]" if pd.notna(s.get("previous_id")) else "")
-            selected_count=int(((tr_all.session_id==s.id)&(tr_all.compare_selected==1)&(tr_all.has_summary==1)).sum())
+            selected_count=int(((tr_all.session_id==s.id)&(tr_all.compare_selected==1)).sum())
             vals = [str(s["id"]), name, s["dis_file"], s["first_start_time"] or s["date_measured"] or "",
                     code or "", river or ("목록에 없음" if code and not self.cat.empty else ""),
                     _nn(s.get("operator")) or "", str(selected_count),
@@ -844,6 +857,7 @@ class DbTab(QWidget):
                 self.reload()
 
     def register(self, sd):
+        if not self.ensure_database():return
         try:
             status, _sid, msg = db.register_session(self.db_path, sd, selected_nums=self.main.selected_nums())
         except Exception as e:  # noqa: BLE001
@@ -853,6 +867,7 @@ class DbTab(QWidget):
         self.reload()
 
     def import_dir(self):
+        if not self.ensure_database():return
         d = QFileDialog.getExistingDirectory(self, "새 측정 자료 폴더 선택 (하위 폴더까지 찾음)",
                                              self.main.settings.value("last_folder", str(Path.home())))
         if not d:
@@ -877,6 +892,7 @@ class DbTab(QWidget):
                                 "자세한 내용은 '가져오기 보고' 탭을 보세요.")
 
     def import_catalog(self):
+        if not self.ensure_database():return
         p, _ = QFileDialog.getOpenFileName(self, "소하천 목록 파일 (예: 220개소_…_AWS_특성정보포함.xlsx)", "",
                                            "엑셀/CSV (*.xlsx *.csv)")
         if not p:
@@ -891,6 +907,7 @@ class DbTab(QWidget):
         QMessageBox.information(self, "소하천 목록", f"소하천 {n}곳을 저장했습니다.\n\n" + "\n".join(msgs))
 
     def import_ref(self):
+        if not self.ensure_database():return
         p, _ = QFileDialog.getOpenFileName(self, "비교 유량 양식 파일", "", "CSV/엑셀 (*.csv *.xlsx)")
         if not p:
             return
@@ -904,6 +921,7 @@ class DbTab(QWidget):
         QMessageBox.information(self, "비교 유량", "불러오기 결과는 '가져오기 보고' 탭에 있습니다.")
 
     def import_ext(self):
+        if not self.ensure_database():return
         p, _ = QFileDialog.getOpenFileName(self, "외부 자료 파일 (FEWP CSV, AWS 강우 등)", "", "CSV/엑셀 (*.csv *.xlsx)")
         if not p:
             return
@@ -958,8 +976,10 @@ class DbTab(QWidget):
         ids = self.checked_ids()
         if not ids:
             return
-        if QMessageBox.question(self, "삭제 확인", f"체크한 등록 {len(ids)}건을 DB에서 삭제할까요?\n"
-                                                   "(측정 원본 파일은 지워지지 않고, 다시 가져올 수 있습니다)") == QMessageBox.Yes:
+        targets=self.sess[self.sess.id.isin(ids)]
+        names='\n'.join(f"• {r.river_name or '지점 미지정'} · {r.first_start_time or r.session_name}" for _,r in targets.head(5).iterrows())
+        message=f'측정 {len(ids)}건을 삭제할까요?\n{names}\nDB의 등록·수위·비교 입력이 삭제됩니다. 원본 파일은 유지됩니다.\n연결된 이전 버전은 단독 삭제할 수 없습니다.'
+        if QMessageBox.question(self,'등록 삭제',message) == QMessageBox.Yes:
             try:
                 db.delete_sessions(self.db_path, ids)
             except ValueError as e:

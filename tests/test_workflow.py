@@ -82,4 +82,19 @@ class AccumulatedUiTests(unittest.TestCase):
         finally:
             w.close();settings.setValue('db_path',previous)
 
+
+class SiteRevisionTests(unittest.TestCase):
+    def test_trial_site_is_not_replaced_by_rsq_station_code_on_revision(self):
+        from rsq_compare.core.model import SessionData,SessionFiles,TransectRecord,DisResult
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);path=root/'db.sqlite';source=root/'input';source.mkdir()
+            dis=source/'sample.dis';dis.write_text('original');detail=source/'sample_T01.sum';detail.write_text('raw')
+            files=SessionFiles('sample',source,dis=dis)
+            record=TransectRecord(1,'T01',dis_row_raw={'file':'01-20260101','start':'2026-01-01 09:00:00'},dis_values={'total_q':1})
+            sd=SessionData(files,DisResult(dis,{'Site Information':{'Station Number':'00123456789'}},[],[],[]),{},[record],{1:pd.DataFrame({'v':[1]})},{},{},[],dis_path=dis)
+            _,first,_=db.register_session(path,sd);local=workflow.assign_site(path,first,local_name='합성 시험지점')
+            detail.write_text('changed raw');status,second,_=db.register_session(path,sd)
+            row=db.sessions_df(path).set_index('id').loc[second]
+            self.assertEqual(status,'version');self.assertEqual(row.local_site_id,local);self.assertIsNone(row.site_code)
+
 if __name__=='__main__':unittest.main()

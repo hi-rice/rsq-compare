@@ -42,3 +42,25 @@
 - 가상 회귀 42개 통과. 네이티브 차트 존재, 원래 숫자 0/빈값, 고정 통계, 수식 주입 방지 검증.
 - 실제 test 기존 검증 41개 통과, 새 단일/누적 Excel 첫 시트·차트·7회차 통계·T07 빈값·경로 비노출 검증 통과.
 - 실제 Qt 실행 캡처와 PNG를 확인했다. Windows Excel 차트 최종 렌더링/인쇄와 고배율은 미검증.
+
+## D. Windows 패키징
+
+- 콘솔 없는 PyInstaller onedir + 사용자 권한 Inno Setup 설치파일 설정, 수동 GitHub Actions 추가.
+- 제품 이름/아이콘/버전 리소스는 앱 원본 값 사용. 빌드 성공한 경우만 installer artifact/manifest/hash 생성.
+- 설치 위치와 데이터/로그 분리. 기존 DB 위치 유지, 없어진 기존 DB의 조용한 대체 방지.
+- 로그에는 예외 메시지/원문/전체 경로 대신 오류 종류와 코드 파일·행만 기록.
+- Linux --prepare-only 성공: 아이콘·Windows 버전 메타데이터·라이선스 준비. exe 미생성.
+- 가상 회귀 48개 통과. 기존 경로 유지/미존재 DB 비대체/로그 비밀값 배제/준비 manifest/배포 자료 제외 포함.
+- Windows 실행 환경 없음. GitHub Actions API 조회는 Forbidden으로 거절됨. Git 푸시와 API 접근은 별도.
+- 실제 Windows 빌드/설치파일/오프라인 Python 없는 PC 설치·실행·업데이트·제거 검증은 미실행.
+- 상세 빌드 방법·artifact 위치와 최소 Windows 확인 항목은 packaging/windows/README.md 참조.
+
+## 구분해야 할 남은 검증
+
+실제 FEWP/AWS 호환, 실제 220개소 원본 파일의 전체 UI 작업, 실제 개인 DB 전체 사례,
+Windows Excel 렌더링/인쇄와 Windows 배율/설치/업데이트는 미검증이다.
+220행 검색 검증은 명시적인 합성 목록이며 첨부 데모 DB 보존 검증과도 구분한다.
+T07 포함 재내보내기 DIS가 없어서 관련 추가 검증과 원본 목록 필요 전체 검증은 실행하지 못했다.
+캡처 중 초기 숨겨진 Matplotlib 캔버스에서 constrained_layout 경고가 있었다.
+검토한 표시 화면에서는 소형 창을 포함해 주요 그래프와 통계 영역을 분리했지만,
+모든 Windows 배율에서 겹침이 없다고 보증하지 않는다.

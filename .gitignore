@@ -57,3 +57,5 @@ screenshots/
 
 # Local database migration backups
 *.bak
+
+.build-venv/

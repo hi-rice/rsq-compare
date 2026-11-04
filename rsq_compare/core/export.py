@@ -40,7 +40,7 @@ HEADER_FILL = PatternFill("solid", fgColor="DCE6F1")
 PROCESS_CONDITIONS = [
     "회차 연결: .dis 'File Name' 앞 번호(예: 08-Transect → T08)와 상세 파일명 T번호를 연결 (행 순서로 붙이지 않음)",
     "유량·폭·면적·평균 속력: DIS에 기록된 RSQ 결과를 그대로 사용 (재계산·보정·외삽 없음)",
-    "시간: 모든 시각은 파일 원문 그대로. UTC/한국시간 변환 등 시간 보정 미적용",
+    "시간: RSQ 원문 시각 보존. 외부자료 비교는 원문 시간대 우선으로 UTC 정규화, 시간대 없는 값에만 사용자 기준 적용",
     "결측: 빈칸/#N/A/NaN은 빈 셀로 유지 (0으로 바꾸지 않음)",
     "구간: 시작 Edge/횡단/마침 Edge는 .rsqmb 내부 Configuration.json의 SampleType(RSQ 기록값)을 샘플 번호로 연결해 표시. "
     "샘플 번호가 하나라도 안 맞거나 정보가 없으면 연결하지 않고 전체 기록만 표시 (추정·자동 분류 없음)",
@@ -157,7 +157,7 @@ def export_all(sd: SessionData, selected_nums: list[int], out_parent: Path,
     fig = fig_q_bar(sd, selected_nums, st)
     p = png_dir / "01_회차별_총유량_DIS.png"
     fmt=lambda x:'계산 불가' if x is None else f'{x:.4f}'
-    fig.suptitle(f'선택 {st.n}회 · 평균 {fmt(st.mean)} {q_unit(sd)}\n표본SD(n−1) {fmt(st.std)} · 모SD(n) {fmt(st.pstd)} · COV {fmt(st.cov)} (무차원)',fontsize=10)
+    fig.suptitle(f'유효 선택 {st.n}회 · 평균 {fmt(st.mean)} {q_unit(sd)}\n표본SD(n−1) {fmt(st.std)} · 모SD(n) {fmt(st.pstd)} · COV {fmt(st.cov)} (무차원)',fontsize=10)
     fig.savefig(p, dpi=150)
     written.append(p)
     for r in sd.records:
