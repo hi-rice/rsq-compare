@@ -97,4 +97,25 @@ class SiteRevisionTests(unittest.TestCase):
             row=db.sessions_df(path).set_index('id').loc[second]
             self.assertEqual(status,'version');self.assertEqual(row.local_site_id,local);self.assertIsNone(row.site_code)
 
+class GaugeMetadataTests(unittest.TestCase):
+    setUp=WorkflowTests.setUp
+    tearDown=WorkflowTests.tearDown
+    def test_clock_basis_is_saved_and_explicit_offset_is_preserved(self):
+        workflow.save_gauge(self.path,1,0,'cm','2026-01-01T09:00:00+09:00','수위표','기준면A',basis='UTC')
+        r=db.transects_df(self.path).iloc[0]
+        self.assertEqual(r.gh_manual_basis,'UTC');self.assertEqual(r.gh_manual_time,'2026-01-01T09:00:00+09:00')
+        self.assertEqual(r.gh_manual_utc,'2026-01-01T00:00:00+00:00')
+    def test_revision_keeps_unit_datum_and_explicit_clear(self):
+        from rsq_compare.core.identity import copy_inputs
+        with db.connect(self.path) as c:
+            c.execute("INSERT INTO sessions(id,session_name,dis_sha256) VALUES(2,'새 버전','hash2')")
+            c.execute("INSERT INTO transects(id,session_id,num,label) VALUES(2,2,1,'T01')")
+        workflow.save_gauge(self.path,1,0.5,'cm','2026-01-01 09:00','가상 출처','기준면A',basis='UTC+9')
+        with db.connect(self.path) as c:copy_inputs(c,1,2)
+        r=db.transects_df(self.path,[2]).iloc[0]
+        self.assertEqual((r.gh_manual,r.gh_manual_unit,r.gh_datum),(0.5,'cm','기준면A'))
+        workflow.save_gauge(self.path,2,None,'m',datum='미확인')
+        with db.connect(self.path) as c:copy_inputs(c,1,2)
+        self.assertIsNone(db.transects_df(self.path,[2]).iloc[0].gh_manual)
+
 if __name__=='__main__':unittest.main()

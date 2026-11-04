@@ -61,11 +61,13 @@ class ObservationDialog(QDialog):
         self.source.setText(r.get('gh_source') or '')
         self.datum.setText(r.get('gh_datum') or '미확인')
         self.note.setText(r.get('gh_manual_note') or '')
+        basis=r.get('gh_manual_basis')
+        if basis in ('UTC+9','UTC'):self.basis.setCurrentText(basis)
 
     def accept(self):
         try:
             value=float(self.value.text()) if self.value.text().strip() else None
-            if self.kind=='gauge':workflow.save_gauge(self.path,self.target.currentData(),value,self.unit.currentText(),self.time.text(),self.source.text(),self.datum.text(),self.note.text())
+            if self.kind=='gauge':workflow.save_gauge(self.path,self.target.currentData(),value,self.unit.currentText(),self.time.text(),self.source.text(),self.datum.text(),self.note.text(),basis=self.basis.currentText())
             else:
                 if value is None:raise ValueError('비교 유량을 입력하세요.')
                 target=self.target.currentData();scope='session' if target is None else 'window' if target=='window' else 'transect'

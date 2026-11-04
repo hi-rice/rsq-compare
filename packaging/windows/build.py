@@ -28,7 +28,11 @@ def prepare(target):
     text=f'''VSVersionInfo(ffi=FixedFileInfo(filevers={version!r},prodvers={version!r},mask=0x3f,flags=0,OS=0x40004,fileType=0x1,subtype=0,date=(0,0)),kids=[StringFileInfo([StringTable('040904B0',[StringStruct('FileDescription',{APP_NAME!r}),StringStruct('ProductName',{APP_NAME!r}),StringStruct('FileVersion',{APP_VERSION!r}),StringStruct('ProductVersion',{APP_VERSION!r})])]),VarFileInfo([VarStruct('Translation',[1033,1200])])])'''
     (target/'version_info.txt').write_text(text,encoding='utf-8')
     (target/'version.iss').write_text(f'#define AppVersion "{APP_VERSION}"\n#define AppName "{APP_NAME}"\n',encoding='utf-8-sig')
-    (target/'manifest.json').write_text(json.dumps(dict(name=APP_NAME,version=APP_VERSION,python=sys.version,platform=sys.platform,prepared_only=True),ensure_ascii=False,indent=2),encoding='utf-8')
+    try:
+        revision=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True,stderr=subprocess.DEVNULL).strip()
+        dirty=bool(subprocess.check_output(['git','status','--porcelain'],cwd=ROOT,text=True))
+    except (OSError,subprocess.CalledProcessError):revision,dirty=None,None
+    (target/'manifest.json').write_text(json.dumps(dict(name=APP_NAME,version=APP_VERSION,git_revision=revision,source_dirty=dirty,python=sys.version,platform=sys.platform,prepared_only=True),ensure_ascii=False,indent=2),encoding='utf-8')
     licenses=target/'licenses';licenses.mkdir(exist_ok=True)
     for dist in importlib.metadata.distributions():
         for f in dist.files or []:

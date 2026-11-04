@@ -59,9 +59,12 @@ def copy_inputs(con, old, new):
         con.execute('UPDATE sessions SET site_code=?,local_site_id=?,site_code_source=? WHERE id=?',(*old_point,new))
     con.execute('''INSERT OR IGNORE INTO reference_q(session_id,ref_q,unit,source,memo,updated_at,site_key)
                    SELECT ?,ref_q,unit,source,memo,updated_at,site_key FROM reference_q WHERE session_id=?''',(new,old))
-    for col in ('gh_manual','gh_manual_time','gh_manual_note','gh_manual_unit','gh_datum','gh_source'):
-        con.execute(f"""UPDATE transects SET {col}=COALESCE({col},(SELECT p.{col} FROM transects p
-                        WHERE p.session_id=? AND p.num=transects.num)) WHERE session_id=?""",(old,new))
+    gauge_columns=('gh_manual','gh_manual_time','gh_manual_note','gh_manual_unit','gh_datum','gh_source','gh_manual_basis','gh_manual_utc','gh_manual_explicit')
+    fields=','.join(gauge_columns)
+    con.execute(f"""UPDATE transects SET ({fields})=(SELECT {fields} FROM transects p
+                    WHERE p.session_id=? AND p.num=transects.num)
+                    WHERE session_id=? AND gh_manual IS NULL AND gh_manual_explicit=0
+                    AND EXISTS(SELECT 1 FROM transects p WHERE p.session_id=? AND p.num=transects.num)""",(old,new,old))
     con.execute("""UPDATE transects SET compare_selected=(SELECT p.compare_selected FROM transects p
                    WHERE p.session_id=? AND p.num=transects.num)
                    WHERE session_id=? AND selection_explicit=0 AND EXISTS

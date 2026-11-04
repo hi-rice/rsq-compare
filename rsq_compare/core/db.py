@@ -116,7 +116,7 @@ MIGRATE_COLUMNS = {
                  ("previous_id", "INTEGER"), ("review_status", "TEXT DEFAULT 'confirmed'"),
                  ("review_note", "TEXT"), ("compare_selected", "INTEGER DEFAULT 1")],
     "transects": [("gh_start", "REAL"), ("gh_start_time", "TEXT"), ("gh_end", "REAL"), ("gh_end_time", "TEXT"),
-                  ("gh_unit", "TEXT"), ("gh_manual", "REAL"), ("gh_manual_time", "TEXT"), ("gh_manual_note", "TEXT"), ("gh_manual_unit", "TEXT DEFAULT 'm'"), ("gh_datum", "TEXT DEFAULT '미확인'"), ("gh_source", "TEXT"), ("compare_selected", "INTEGER DEFAULT 1"), ("selection_explicit", "INTEGER DEFAULT 0")],
+                  ("gh_unit", "TEXT"), ("gh_manual", "REAL"), ("gh_manual_time", "TEXT"), ("gh_manual_note", "TEXT"), ("gh_manual_unit", "TEXT DEFAULT 'm'"), ("gh_datum", "TEXT DEFAULT '미확인'"), ("gh_source", "TEXT"), ("gh_manual_basis", "TEXT DEFAULT '미확인'"), ("gh_manual_utc", "TEXT"), ("gh_manual_explicit", "INTEGER DEFAULT 0"), ("compare_selected", "INTEGER DEFAULT 1"), ("selection_explicit", "INTEGER DEFAULT 0")],
     "ext_series": [("site_code", "TEXT"), ("kind", "TEXT"), ("target_session_id", "INTEGER"),
                    ("rain_type", "TEXT"), ("rain_interval_min", "REAL")],
     "reference_q": [("site_key", "TEXT")],
@@ -544,7 +544,7 @@ def set_operator(db_path: Path, sid: int, name: str) -> None:
 
 def set_gauge_manual(db_path: Path, transect_id: int, value: float | None, obs_time: str = "", note: str = "") -> None:
     with connect(db_path) as con:
-        con.execute("UPDATE transects SET gh_manual=?, gh_manual_time=?, gh_manual_note=? WHERE id=?",
+        con.execute("UPDATE transects SET gh_manual=?, gh_manual_time=?, gh_manual_note=?, gh_manual_explicit=1 WHERE id=?",
                     (value, obs_time or None, note or None, int(transect_id)))
 
 
@@ -570,5 +570,5 @@ def gauge_view(tr: pd.DataFrame) -> pd.DataFrame:
                      "RSQ 끝 수위": t.get("gh_end"), "RSQ 끝 관측시각": t.get("gh_end_time"),
                      "직접 입력 수위": man, "직접 입력 시각": t.get("gh_manual_time"), "직접 입력 메모": t.get("gh_manual_note"),
                      "사용 수위": use, "출처": src, "수위 단위": t.get("gh_unit") or "m" if rsq is not None else t.get("gh_manual_unit") or "m",
-                     "직접 입력 기준면": t.get("gh_datum") or "미확인", "직접 입력 출처": t.get("gh_source"), "비고": note})
+                     "직접 입력 기준면": t.get("gh_datum") or "미확인", "직접 입력 시간대 없는 값의 기준": t.get("gh_manual_basis") or "미확인", "직접 입력 시각 UTC": t.get("gh_manual_utc"), "직접 입력 출처": t.get("gh_source"), "비고": note})
     return pd.DataFrame(rows)

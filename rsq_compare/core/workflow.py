@@ -49,13 +49,14 @@ def assign_site(path,sid,code=None,local_name=None,region='',local_id=None):
     return local_id if not code else str(code)
 
 
-def save_gauge(path,tid,value,unit='m',observed='',source='',datum='미확인',note=''):
+def save_gauge(path,tid,value,unit='m',observed='',source='',datum='미확인',note='',basis='미확인'):
     from rsq_compare.core import db
     if value is not None and not math.isfinite(float(value)):raise ValueError('수위는 유한한 숫자로 입력하세요.')
     if unit not in ('m','cm'):raise ValueError('수위 단위를 확인하세요.')
+    utc,_=normalize_time(observed,basis)
     with db.connect(path) as con:
-        con.execute('''UPDATE transects SET gh_manual=?,gh_manual_unit=?,gh_manual_time=?,gh_source=?,gh_datum=?,gh_manual_note=? WHERE id=?''',
-                    (value,unit,observed or None,source or None,datum or '미확인',note or None,tid))
+        con.execute('''UPDATE transects SET gh_manual=?,gh_manual_unit=?,gh_manual_time=?,gh_source=?,gh_datum=?,gh_manual_note=?,gh_manual_basis=?,gh_manual_utc=?,gh_manual_explicit=1 WHERE id=?''',
+                    (value,unit,observed or None,source or None,datum or '미확인',note or None,basis,None if pd.isna(utc) else utc.isoformat(),tid))
 
 
 def save_reference(path,sid,value,unit,source,scope='session',num=None,start='',end='',basis='UTC+9'):
