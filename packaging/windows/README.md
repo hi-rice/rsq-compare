@@ -78,3 +78,17 @@ https://github.com/actions/runner-images/blob/main/images/windows/Windows2022-Re
 컴파일러 해시와 CI에서 확인한 버전은 build-manifest.json에도 기록한다.
 러너 이미지는 갱신되므로 이후에도 항상 6.7.1이 설치됐다고 가정하지 않는다.
 Linux에서는 PowerShell/ISCC/설치파일 빌드까지 실행한 것으로 간주하지 않는다.
+
+### 버전 메타데이터가 0.0.0인 ISCC
+
+ISCC.exe의 Windows 파일 버전 리소스가 0.0.0이어도 실제 컴파일 엔진이 0.0.0이라는 뜻은 아니다.
+파일 리소스 값으로 거절하던 검사를 제거하고, 실제 엔진 검증으로 대체했다.
+공식 6.7.1/6.4.2 소스는 --version 옵션을 제공하지 않고 컴파일 시
+`Compiler engine version: Inno Setup <버전>`을 출력한다.
+https://github.com/jrsoftware/issrc/blob/is-6_7_1/Projects/ISCC.dpr
+
+사전 점검은 임시 디렉터리의 작은 스크립트를 `/O-`와 `Output=no`로 컴파일한다.
+출력 설치파일 없이 성공해야 하며, 엔진의 전체 버전이 6.x/6.3 이상인지 확인한다.
+실패 코드, 버전 미확인, 지원 범위 밖 버전은 그대로 실패 처리한다.
+동일 점검을 실제 빌드 직전에도 실행해 manifest에 엔진 버전과 컴파일러 해시를 기록한다.
+Linux 테스트에서는 컴파일러 출력/실패를 모사했으며 실제 Windows 컴파일 통과로 간주하지 않는다.

@@ -98,4 +98,34 @@ class InnoCompilerTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'ISCC.exe'):builder.main()
             prepare.assert_not_called();run.assert_not_called()
 
+    def test_engine_banner_is_used_without_pe_version_resources(self):
+        import subprocess
+        builder=self.builder()
+        captured=[]
+        def run_probe(args,**kwargs):
+            script=Path(args[-1]);captured.append(script)
+            self.assertIn('/O-',args)
+            self.assertIn('Output=no',script.read_text(encoding='utf-8-sig'))
+            self.assertTrue((script.parent/'probe.txt').exists())
+            return subprocess.CompletedProcess(args,0,stdout=b'Inno Setup 6 Command-Line Compiler\r\nCompiler engine version: Inno Setup 6.7.1\r\n',stderr=b'')
+        with tempfile.TemporaryDirectory() as folder:
+            compiler=Path(folder)/'ISCC.exe';compiler.write_bytes(b'fixture with no PE version resource')
+            with patch.object(builder.subprocess,'run',side_effect=run_probe):
+                info=builder.probe_compiler(compiler)
+            self.assertEqual(info['version'],'6.7.1');self.assertEqual(info['path'],str(compiler.resolve()))
+            self.assertEqual(len(info['sha256']),64)
+            self.assertFalse(captured[0].exists())
+
+    def test_invalid_engine_or_failed_probe_remains_a_failure(self):
+        import subprocess
+        builder=self.builder()
+        cases=[(0,b'Compiler engine version: Inno Setup 6.2.0\n'),
+               (0,b'Inno Setup 6 Command-Line Compiler\n'),
+               (2,b'Compiler engine version: Inno Setup 6.7.1\nCompile aborted.\n')]
+        with tempfile.TemporaryDirectory() as folder:
+            compiler=Path(folder)/'ISCC.exe';compiler.write_bytes(b'fixture')
+            for code,banner in cases:
+                with self.subTest(code=code,banner=banner),patch.object(builder.subprocess,'run',return_value=subprocess.CompletedProcess([],code,stdout=banner,stderr=b'')):
+                    with self.assertRaises(RuntimeError):builder.probe_compiler(compiler)
+
 if __name__=='__main__':unittest.main()

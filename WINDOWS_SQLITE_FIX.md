@@ -92,7 +92,7 @@ https://github.com/hi-rice/rsq-compare/actions/workflows/windows-package.yml
 
 `Run workflow` → Branch `main` → 초록색 `Run workflow`를 누른다.
 실패한 옛 실행의 Re-run jobs는 옛 a26d807을 재실행하므로 이 수정 확인에 사용하지 않는다.
-새 실행에서 소스 커밋, 테스트 58개 결과, Ensure Inno Setup, Build installer,
+새 실행에서 소스 커밋, 테스트 60개 결과, Ensure Inno Setup, Build installer,
 RSQCompare-Windows-installer artifact 생성을 각각 확인한다.
 그 뒤 Python 없는 Windows PC에서 설치/실행/가져오기/저장/재실행을 별도로 확인한다.
 
@@ -107,3 +107,12 @@ RSQCompare-Windows-installer artifact 생성을 각각 확인한다.
 선택한 컴파일러 경로·버전·해시를 기록하고 빌드 단계에 전달한다.
 새 경로 검증 3개를 포함해 Linux 테스트 58개가 통과했다.
 PowerShell 스크립트/실제 Windows 컴파일·설치 검증은 이 환경에서 실행하지 못했다.
+
+## 후속 Inno Setup 버전 0.0.0 오류
+
+Ensure 단계가 찾은 ISCC의 FileMajorPart/FileMinorPart/FileBuildPart가 0인 사례다.
+이를 실제 엔진 버전 0.0.0으로 잘못 판단한 검사를 수정했다.
+공식 6.7.1/6.4.2 CLI 소스의 출력 형식을 확인하고, 설치파일 출력을 끈 임시 컴파일로
+엔진 전체 버전·실제 작동을 검증한다. 버전 미확인/지원 범위 밖/컴파일 실패는 허용하지 않는다.
+새 회귀 검증을 포함해 Linux 60개 테스트가 통과했다.
+PowerShell 및 실제 Windows 엔진 사전 점검/설치파일 생성/PC 설치는 아직 미검증이다.

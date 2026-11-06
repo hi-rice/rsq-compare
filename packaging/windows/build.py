@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import subprocess
 import shutil
+import tempfile
+import re
 import sys
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -68,12 +70,42 @@ def resolve_iscc():
     raise RuntimeError('ISCC.exe를 찾지 못했습니다. ensure-iscc.ps1을 먼저 실행하거나 ISCC_EXE를 지정하세요.')
 
 
+def probe_compiler(compiler):
+    """ISCC 파일 리소스 대신 실제 컴파일 엔진을 출력 없이 검증한다."""
+    compiler=Path(compiler).resolve()
+    with tempfile.TemporaryDirectory(prefix='rsq-iscc-probe-') as folder:
+        root=Path(folder)
+        (root/'probe.txt').write_text('compiler probe',encoding='utf-8')
+        script=root/'probe.iss'
+        script.write_text('[Setup]\nAppName=RSQ Compiler Probe\nAppVersion=1.0\n'
+                          'DefaultDirName={autopf}\\RSQCompilerProbe\nUninstallable=no\nOutput=no\n'
+                          '[Files]\nSource: "probe.txt"; DestDir: "{app}"\n',encoding='utf-8-sig')
+        result=subprocess.run([str(compiler),'/O-',str(script)],cwd=root,capture_output=True,timeout=60)
+        output=result.stdout+b'\n'+result.stderr
+        if result.returncode:
+            raise RuntimeError(f'ISCC probe failed (exit {result.returncode}): '+output.decode('utf-8',errors='replace')[-4000:])
+        match=re.search(rb'(?im)^Compiler engine version:[ \t]*Inno Setup[ \t]+(\d+)\.(\d+)\.(\d+)(?:[. \t\r].*)?$',output)
+        if not match:raise RuntimeError('ISCC 엔진 전체 버전을 확인하지 못했습니다: '+output.decode('utf-8',errors='replace')[-4000:])
+        version=tuple(int(x) for x in match.groups())
+        if version[0]!=6 or version<(6,3,0):
+            raise RuntimeError(f'지원하지 않는 Inno Setup 엔진 버전 {version}. 6.x의 6.3 이상이 필요합니다.')
+        if list(root.glob('*.exe')) or list(root.glob('Output/*.exe')):
+            raise RuntimeError('출력 없는 ISCC 사전 점검에서 예상하지 않은 설치파일이 생성됐습니다.')
+    import hashlib
+    return dict(path=str(compiler),version='.'.join(str(v) for v in version),sha256=hashlib.sha256(compiler.read_bytes()).hexdigest())
+
+
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--prepare-only',action='store_true');parser.add_argument('--out',type=Path)
+    parser=argparse.ArgumentParser();parser.add_argument('--prepare-only',action='store_true');parser.add_argument('--out',type=Path);parser.add_argument('--probe-iscc',type=Path)
     args=parser.parse_args()
+    if args.probe_iscc:
+        try:result=probe_compiler(args.probe_iscc)
+        except (OSError,RuntimeError,subprocess.TimeoutExpired) as exc:parser.exit(1,str(exc)+'\n')
+        print(json.dumps(result,ensure_ascii=True));return
     if sys.platform!='win32' and not args.prepare_only:parser.error('Windows 빌드는 Windows에서만 실행하세요.')
     if args.out and not args.prepare_only:parser.error('--out은 준비 검증에만 사용할 수 있습니다.')
     iscc=None if args.prepare_only else resolve_iscc()
+    compiler_info=None if args.prepare_only else probe_compiler(iscc)
     target=prepare(args.out or ROOT/'build/windows')
     if args.prepare_only:
         print(f'PREPARED ONLY: {APP_VERSION}, Windows 실행파일 미생성');return
@@ -85,7 +117,7 @@ def main():
     import hashlib
     manifest=json.loads((target/'manifest.json').read_text(encoding='utf-8'))
     manifest.update(prepared_only=False,windows_build_succeeded=True,installer=installers[0].name,
-                    inno_setup_version=os.environ.get('INNO_SETUP_VERSION'),iscc_sha256=hashlib.sha256(iscc.read_bytes()).hexdigest(),
+                    inno_setup_version=compiler_info['version'],iscc_sha256=compiler_info['sha256'],
                     sha256=hashlib.sha256(installers[0].read_bytes()).hexdigest())
     (ROOT/'dist/installer/build-manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding='utf-8')
     print('Windows installer:',installers[0].name)

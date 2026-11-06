@@ -27,12 +27,13 @@ if (!$compiler) {
 }
 if (!$compiler) { throw 'ISCC.exe was not found after installation.' }
 
-$info = (Get-Item -LiteralPath $compiler).VersionInfo
-$version = [version]("{0}.{1}.{2}" -f $info.FileMajorPart, $info.FileMinorPart, $info.FileBuildPart)
-if ($version.Major -ne 6 -or $version -lt [version]'6.3.0') {
-    throw "Unsupported Inno Setup version $version. Require Inno Setup 6.3 or later in the 6.x series."
-}
-$hash = (Get-FileHash -LiteralPath $compiler -Algorithm SHA256).Hash
+# ISCC's executable resource can be 0.0.0; query its real compiler engine instead.
+$probeOutput = & python "$PSScriptRoot/build.py" --probe-iscc $compiler
+if ($LASTEXITCODE -ne 0) { throw "Inno Setup engine probe failed: $LASTEXITCODE" }
+$probe = ($probeOutput -join "`n") | ConvertFrom-Json
+$version = $probe.version
+$hash = $probe.sha256
+$compiler = $probe.path
 Write-Host "Using Inno Setup $version ($compiler)"
 Write-Host "ISCC SHA256: $hash"
 $env:ISCC_EXE = $compiler
