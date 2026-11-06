@@ -1,10 +1,11 @@
 import importlib.util
+import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-from rsq_compare import APP_VERSION
+from rsq_compare import APP_NAME, APP_VERSION
 from rsq_compare import runtime
 
 class Settings:
@@ -25,7 +26,7 @@ class RuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder,patch.object(runtime,'user_data_dir',return_value=Path(folder)):
             try:raise ValueError('SECRET_RAW_MEASUREMENT_AND_TOKEN')
             except ValueError as exc:path=runtime.log_error(type(exc),exc.__traceback__)
-            text=path.read_text();self.assertIn(APP_VERSION,text);self.assertIn('ValueError',text)
+            text=path.read_text(encoding='utf-8');self.assertIn(APP_VERSION,text);self.assertIn('ValueError',text)
             self.assertNotIn('SECRET_RAW_MEASUREMENT_AND_TOKEN',text);self.assertNotIn(str(Path(__file__).resolve()),text)
     def test_missing_saved_db_is_not_replaced_on_window_start(self):
         os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
@@ -49,10 +50,19 @@ class PackagingTests(unittest.TestCase):
         spec=importlib.util.spec_from_file_location('windows_builder',p);builder=importlib.util.module_from_spec(spec);spec.loader.exec_module(builder)
         with tempfile.TemporaryDirectory() as folder:
             out=builder.prepare(Path(folder));self.assertTrue((out/'app.ico').exists())
-            self.assertIn(APP_VERSION,(out/'version_info.txt').read_text())
-            self.assertIn('"prepared_only": true',(out/'manifest.json').read_text())
+            self.assertIn(APP_VERSION,(out/'version_info.txt').read_text(encoding='utf-8'))
+            self.assertIn(APP_NAME,(out/'version_info.txt').read_text(encoding='utf-8'))
+            self.assertEqual(json.loads((out/'manifest.json').read_text(encoding='utf-8'))['name'],APP_NAME)
+            self.assertIn('"prepared_only": true',(out/'manifest.json').read_text(encoding='utf-8'))
             (out/'RSQCompare.exe').write_bytes(b'fake-test-only')
             (out/'private.db').write_bytes(b'private')
             with self.assertRaises(RuntimeError):builder.audit_dist(out)
+    def test_preparation_validation_under_cp1252_default(self):
+        # Windows 서유럽 로캘을 Linux에서도 재현한다. 명시한 UTF-8은 그대로 따른다.
+        original_read_text = Path.read_text
+        def cp1252_read_text(path, encoding=None, errors=None):
+            return original_read_text(path, encoding=encoding or 'cp1252', errors=errors)
+        with patch.object(Path, 'read_text', cp1252_read_text):
+            self.test_preparation_generates_versioned_icon_without_claiming_windows_build()
 
 if __name__=='__main__':unittest.main()

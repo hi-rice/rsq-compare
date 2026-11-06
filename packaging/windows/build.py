@@ -29,8 +29,8 @@ def prepare(target):
     (target/'version_info.txt').write_text(text,encoding='utf-8')
     (target/'version.iss').write_text(f'#define AppVersion "{APP_VERSION}"\n#define AppName "{APP_NAME}"\n',encoding='utf-8-sig')
     try:
-        revision=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True,stderr=subprocess.DEVNULL).strip()
-        dirty=bool(subprocess.check_output(['git','status','--porcelain'],cwd=ROOT,text=True))
+        revision=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True,encoding='utf-8',stderr=subprocess.DEVNULL).strip()
+        dirty=bool(subprocess.check_output(['git','status','--porcelain'],cwd=ROOT,text=True,encoding='utf-8'))
     except (OSError,subprocess.CalledProcessError):revision,dirty=None,None
     (target/'manifest.json').write_text(json.dumps(dict(name=APP_NAME,version=APP_VERSION,git_revision=revision,source_dirty=dirty,python=sys.version,platform=sys.platform,prepared_only=True),ensure_ascii=False,indent=2),encoding='utf-8')
     licenses=target/'licenses';licenses.mkdir(exist_ok=True)
