@@ -92,6 +92,18 @@ https://github.com/hi-rice/rsq-compare/actions/workflows/windows-package.yml
 
 `Run workflow` → Branch `main` → 초록색 `Run workflow`를 누른다.
 실패한 옛 실행의 Re-run jobs는 옛 a26d807을 재실행하므로 이 수정 확인에 사용하지 않는다.
-새 실행에서 소스 커밋, 테스트 55개 결과, Ensure Inno Setup, Build installer,
+새 실행에서 소스 커밋, 테스트 58개 결과, Ensure Inno Setup, Build installer,
 RSQCompare-Windows-installer artifact 생성을 각각 확인한다.
 그 뒤 Python 없는 Windows PC에서 설치/실행/가져오기/저장/재실행을 별도로 확인한다.
+
+## 이후 단계: Chocolatey Inno Setup 버전 오류
+
+후속 제공 로그는 Ensure Inno Setup에서 패키지 `innosetup` 버전 6.4.3을
+공급원에서 찾지 못해 종료된 기록이다. SQLite나 앱 계산 오류가 아니다.
+공급원 확인 없이 고정했던 이 버전을 제거했다.
+공식 windows-2022 러너 README의 기본 InnoSetup 6.7.1 제공을 확인하고,
+기존 컴파일러를 먼저 탐색·검증하며 없을 때만 패키지를 설치하도록 수정했다.
+강제 재설치/다운그레이드와 검증 우회는 사용하지 않는다.
+선택한 컴파일러 경로·버전·해시를 기록하고 빌드 단계에 전달한다.
+새 경로 검증 3개를 포함해 Linux 테스트 58개가 통과했다.
+PowerShell 스크립트/실제 Windows 컴파일·설치 검증은 이 환경에서 실행하지 못했다.

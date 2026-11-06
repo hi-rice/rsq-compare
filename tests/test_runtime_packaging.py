@@ -65,4 +65,37 @@ class PackagingTests(unittest.TestCase):
         with patch.object(Path, 'read_text', cp1252_read_text):
             self.test_preparation_generates_versioned_icon_without_claiming_windows_build()
 
+class InnoCompilerTests(unittest.TestCase):
+    def builder(self):
+        p=Path(__file__).resolve().parents[1]/'packaging/windows/build.py'
+        spec=importlib.util.spec_from_file_location('iscc_test_builder',p)
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        return module
+
+    def test_preinstalled_compiler_is_found_in_either_program_files_location(self):
+        builder=self.builder()
+        with tempfile.TemporaryDirectory() as folder:
+            compiler=Path(folder)/'한글 경로'/'Inno Setup 6'/'ISCC.exe'
+            compiler.parent.mkdir(parents=True);compiler.write_bytes(b'test fixture, not an executable')
+            for key in ('ProgramFiles(x86)','ProgramFiles'):
+                variables={'ISCC_EXE':'','ProgramFiles(x86)':'','ProgramFiles':''}
+                variables[key]=str(compiler.parent.parent)
+                with self.subTest(location=key),patch.dict(os.environ,variables),patch.object(builder.shutil,'which',return_value=None):
+                    self.assertEqual(builder.resolve_iscc(),compiler)
+
+    def test_explicit_override_is_respected_and_invalid_override_is_not_silently_replaced(self):
+        builder=self.builder()
+        with tempfile.TemporaryDirectory() as folder:
+            compiler=Path(folder)/'별도 컴파일러.exe';compiler.write_bytes(b'test fixture')
+            with patch.dict(os.environ,{'ISCC_EXE':str(compiler)}):
+                self.assertEqual(builder.resolve_iscc(),compiler)
+            with patch.dict(os.environ,{'ISCC_EXE':str(compiler.with_name('missing.exe'))}),patch.object(builder.shutil,'which',return_value=str(compiler)):
+                with self.assertRaisesRegex(RuntimeError,'ISCC_EXE'):builder.resolve_iscc()
+
+    def test_missing_compiler_fails_before_preparation_or_pyinstaller(self):
+        builder=self.builder()
+        with patch.object(builder.sys,'platform','win32'),patch.object(builder.sys,'argv',['build.py']),patch.dict(os.environ,{'ISCC_EXE':'','ProgramFiles(x86)':'','ProgramFiles':''}),patch.object(builder.shutil,'which',return_value=None),patch.object(builder,'prepare') as prepare,patch.object(builder.subprocess,'run') as run:
+            with self.assertRaisesRegex(RuntimeError,'ISCC.exe'):builder.main()
+            prepare.assert_not_called();run.assert_not_called()
+
 if __name__=='__main__':unittest.main()

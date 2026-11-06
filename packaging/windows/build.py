@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import sys
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -52,23 +53,39 @@ def audit_dist(path):
         if stream.read(2)!=b'MZ':raise RuntimeError('Windows PE 실행파일 형식이 아닙니다.')
 
 
+def resolve_iscc():
+    explicit=os.environ.get('ISCC_EXE')
+    if explicit:
+        path=Path(explicit)
+        if not path.is_file():raise RuntimeError('ISCC_EXE에 지정한 컴파일러가 없습니다.')
+        return path
+    for name in ('ProgramFiles(x86)','ProgramFiles'):
+        if os.environ.get(name):
+            candidate=Path(os.environ[name])/'Inno Setup 6'/'ISCC.exe'
+            if candidate.is_file():return candidate
+    found=shutil.which('ISCC.exe')
+    if found:return Path(found)
+    raise RuntimeError('ISCC.exe를 찾지 못했습니다. ensure-iscc.ps1을 먼저 실행하거나 ISCC_EXE를 지정하세요.')
+
+
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--prepare-only',action='store_true');parser.add_argument('--out',type=Path)
     args=parser.parse_args()
     if sys.platform!='win32' and not args.prepare_only:parser.error('Windows 빌드는 Windows에서만 실행하세요.')
     if args.out and not args.prepare_only:parser.error('--out은 준비 검증에만 사용할 수 있습니다.')
+    iscc=None if args.prepare_only else resolve_iscc()
     target=prepare(args.out or ROOT/'build/windows')
     if args.prepare_only:
         print(f'PREPARED ONLY: {APP_VERSION}, Windows 실행파일 미생성');return
     subprocess.run([sys.executable,'-m','PyInstaller','--clean','--noconfirm',str(ROOT/'packaging/windows/rsq.spec')],cwd=ROOT,check=True)
     audit_dist(ROOT/'dist/RSQCompare')
-    iscc=Path(os.environ.get('ISCC_EXE',r'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'))
     subprocess.run([str(iscc),str(ROOT/'packaging/windows/installer.iss')],cwd=ROOT,check=True)
     installers=list((ROOT/'dist/installer').glob('*.exe'))
     if not installers:raise RuntimeError('설치파일이 생성되지 않았습니다.')
     import hashlib
     manifest=json.loads((target/'manifest.json').read_text(encoding='utf-8'))
     manifest.update(prepared_only=False,windows_build_succeeded=True,installer=installers[0].name,
+                    inno_setup_version=os.environ.get('INNO_SETUP_VERSION'),iscc_sha256=hashlib.sha256(iscc.read_bytes()).hexdigest(),
                     sha256=hashlib.sha256(installers[0].read_bytes()).hexdigest())
     (ROOT/'dist/installer/build-manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding='utf-8')
     print('Windows installer:',installers[0].name)

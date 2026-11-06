@@ -23,10 +23,11 @@ artifact 보관 기간은 14일이며 접근은 저장소/Actions 권한을 따�
 
 ## Windows 개발 PC에서 직접 빌드
 
-개발용 Python 3.12 x64와 Inno Setup 6.4.3을 준비한다. 최종 사용자에게는 Python/Git이 필요 없다.
+개발용 Python 3.12 x64와 Inno Setup 6.x (6.3 이상)을 준비한다. 최종 사용자에게는 Python/Git이 필요 없다.
 저장소 루트에서:
 
 ```powershell
+./packaging/windows/ensure-iscc.ps1
 py -3.12 -m venv .build-venv
 .\.build-venv\Scripts\python.exe -m pip install -r packaging\windows\build-requirements.txt
 .\.build-venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
@@ -63,3 +64,17 @@ ISCC 설치 위치가 다르면 `ISCC_EXE`로 실행파일 경로를 지정한�
 - 잘못된 파일/저장 권한 오류가 앱 안내와 로그에 남고, 로그에 원본 값·인증정보가 없는지 확인.
 
 이 절차를 마치기 전 Windows 설치·업데이트가 검증됐다고 표현하지 않는다.
+
+## Inno Setup 패키지 버전 오류 수정
+
+Chocolatey 공급원에서 찾을 수 없는 6.4.3 고정을 제거했다.
+공식 windows-2022 러너 이미지 도구 목록에서 InnoSetup 6.7.1 기본 제공을 확인했다:
+https://github.com/actions/runner-images/blob/main/images/windows/Windows2022-Readme.md
+
+워크플로는 ISCC_EXE → Program Files의 Inno Setup 6 → PATH 순서로 기존 도구를 찾는다.
+없을 때만 Chocolatey에서 설치하며 설치 실패는 그대로 실패 처리한다.
+기존 도구에 강제 재설치·다운그레이드를 하지 않는다. 지원 범위(6.x, 6.3 이상)를 검사하고
+선택한 경로·실제 버전·SHA-256을 로그에 남긴다. 경로를 GITHUB_ENV로 다음 빌드 단계에 전달한다.
+컴파일러 해시와 CI에서 확인한 버전은 build-manifest.json에도 기록한다.
+러너 이미지는 갱신되므로 이후에도 항상 6.7.1이 설치됐다고 가정하지 않는다.
+Linux에서는 PowerShell/ISCC/설치파일 빌드까지 실행한 것으로 간주하지 않는다.
