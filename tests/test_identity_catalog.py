@@ -1,5 +1,6 @@
 """가상 측정/목록만 사용하는 중복·버전·충돌 회귀 검증."""
 import json
+from contextlib import closing
 import sqlite3
 import tempfile
 import unittest
@@ -142,7 +143,7 @@ class IdentityRegression(unittest.TestCase):
 
     def test_legacy_unique_constraint_migration_keeps_ids_foreign_keys_and_backup(self):
         old=db.SCHEMA.replace('    memo TEXT\n);','    memo TEXT, UNIQUE(session_name, dis_sha256)\n);',1)
-        with sqlite3.connect(self.db) as con:
+        with closing(sqlite3.connect(self.db)) as con, con:
             con.executescript(old)
             con.execute("INSERT INTO sessions(id,session_name,dis_sha256,memo) VALUES(42,'old','hash','보존')")
             con.execute("INSERT INTO reference_q(session_id,ref_q,memo) VALUES(42,4,'비교 메모')")

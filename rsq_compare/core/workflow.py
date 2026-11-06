@@ -1,5 +1,6 @@
 """지점·관측 입력. 원본 DIS와 독립적인 사용자 정보만 저장한다."""
 import math
+from contextlib import closing
 import sqlite3
 import uuid
 from pathlib import Path
@@ -9,13 +10,13 @@ from rsq_compare.core.external import normalize_time, norm_unit
 
 def backup_upgrade(path):
     if not Path(path).exists(): return
-    with sqlite3.connect(path) as con:
+    with closing(sqlite3.connect(path)) as con, con:
         if not con.execute("SELECT 1 FROM sqlite_master WHERE name='sessions'").fetchone(): return
         version=con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
         if version and int(version[0])>=5:return
         dest=Path(str(path)+'.before-v5.bak');n=2
         while dest.exists():dest=Path(str(path)+f'.before-v5-{n}.bak');n+=1
-        with sqlite3.connect(dest) as target:con.backup(target)
+        with closing(sqlite3.connect(dest)) as target, target:con.backup(target)
 
 
 def initialize(con):

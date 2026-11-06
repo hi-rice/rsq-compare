@@ -17,7 +17,7 @@ import math
 import json
 import re
 import sqlite3
-from contextlib import contextmanager
+from contextlib import contextmanager, closing
 from datetime import datetime
 from pathlib import Path
 
@@ -99,13 +99,11 @@ def sha256_file(p: Path) -> str:
 
 @contextmanager
 def connect(db_path: Path):
-    con = sqlite3.connect(str(db_path))
-    con.execute("PRAGMA foreign_keys = ON")
-    try:
+    # Connection.__exit__ handles commit/rollback; closing releases the file handle.
+    # Both also run if PRAGMA or the caller raises.
+    with closing(sqlite3.connect(str(db_path))) as con, con:
+        con.execute("PRAGMA foreign_keys = ON")
         yield con
-        con.commit()
-    finally:
-        con.close()
 
 
 # v0.4에서 추가된 열 (예전 DB는 열기만 하면 자동으로 추가됨, 기존 자료는 그대로)
@@ -136,7 +134,7 @@ def _migrate(con) -> None:
 def _prepare_v4(path):
     if not path.exists():
         return
-    with sqlite3.connect(path) as con:
+    with closing(sqlite3.connect(path)) as con, con:
         row = con.execute("SELECT sql FROM sqlite_master WHERE name='sessions'").fetchone()
         if not row:
             return
@@ -149,7 +147,7 @@ def _prepare_v4(path):
         while backup.exists():
             backup = path.with_name(path.name + f'.before-v4-{n}.bak')
             n += 1
-        with sqlite3.connect(backup) as dest:
+        with closing(sqlite3.connect(backup)) as dest, dest:
             con.backup(dest)
         if not constraint:
             return

@@ -2,6 +2,7 @@
 python tests/verify_legacy_db.py <private old database>
 """
 import hashlib
+from contextlib import closing
 import sqlite3
 import sys
 import tempfile
@@ -15,9 +16,9 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         copy=Path(tmp)/'old.db'
         # WAL 포함 일관된 스냅샷을 읽기 전용 원본 연결에서 만든다.
-        with sqlite3.connect(source.resolve().as_uri()+'?mode=ro',uri=True) as src,sqlite3.connect(copy) as dst:
+        with closing(sqlite3.connect(source.resolve().as_uri()+'?mode=ro',uri=True)) as src, src,closing(sqlite3.connect(copy)) as dst, dst:
             src.backup(dst)
-        with sqlite3.connect(copy) as con:
+        with closing(sqlite3.connect(copy)) as con, con:
             tables=[r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
             snapshots={}
             for t in tables:
@@ -26,7 +27,7 @@ def main():
                 rows=con.execute(f'SELECT * FROM "{t}" ORDER BY rowid').fetchall()
                 snapshots[t]=(cols,[r for r in rows if not(t=='meta' and r[0]=='schema_version')])
         db.init_db(copy);db.init_db(copy)
-        with sqlite3.connect(copy) as con:
+        with closing(sqlite3.connect(copy)) as con, con:
             for t,(cols,old) in snapshots.items():
                 fields=','.join('"'+c+'"' for c in cols)
                 new=con.execute(f'SELECT {fields} FROM "{t}" ORDER BY rowid').fetchall()

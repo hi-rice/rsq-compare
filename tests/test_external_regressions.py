@@ -1,6 +1,7 @@
 """시간대·연결 범위·강우 안전성 회귀 검증. 모든 값은 가상 자료다.
 실행: .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v
 """
+from contextlib import closing
 import sqlite3
 import tempfile
 import unittest
@@ -142,7 +143,7 @@ class ExternalRegression(unittest.TestCase):
     def test_legacy_schema_migration_preserves_rows_and_disables_unassigned(self):
         with tempfile.TemporaryDirectory() as folder:
             p = Path(folder) / 'old.db'
-            with sqlite3.connect(p) as con:
+            with closing(sqlite3.connect(p)) as con, con:
                 con.executescript(db.SCHEMA)
                 con.execute("INSERT INTO sessions(id,session_name,dis_sha256,memo) VALUES(1,'가상','hash','보존')")
                 con.execute("INSERT INTO ext_series(id,name,time_basis) VALUES(7,'기존','UTC+9')")

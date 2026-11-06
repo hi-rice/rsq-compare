@@ -6,6 +6,7 @@
 """
 import hashlib
 import shutil
+from contextlib import closing
 import sqlite3
 import sys
 from pathlib import Path
@@ -142,7 +143,7 @@ check("CLI 내보내기", code == 0 and any((work / "cli_out").rglob("누적비�
 
 print("--- 삭제 / 원본 보존 ---")
 db.delete_sessions(D, [sid3])
-with sqlite3.connect(D) as con:
+with closing(sqlite3.connect(D)) as con, con:
     left = con.execute("SELECT COUNT(*) FROM transects WHERE session_id=?", (sid3,)).fetchone()[0]
     leftr = con.execute("SELECT COUNT(*) FROM reference_q WHERE session_id=?", (sid3,)).fetchone()[0]
 check("등록 삭제 시 회차·기준유량도 함께 삭제", left == 0 and leftr == 0 and len(db.sessions_df(D)) == 2)

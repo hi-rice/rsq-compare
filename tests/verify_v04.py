@@ -9,6 +9,7 @@
 """
 import re
 import shutil
+from contextlib import closing
 import sqlite3
 import sys
 from pathlib import Path
@@ -166,7 +167,7 @@ print("--- 예전(v0.3) DB 업그레이드 ---")
 if old_db and old_db.exists():
     cp = work / "old_v03.db"
     shutil.copy(old_db, cp)
-    with sqlite3.connect(cp) as con:
+    with closing(sqlite3.connect(cp)) as con, con:
         before = con.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
     db.init_db(cp)
     s2 = db.sessions_df(cp)
